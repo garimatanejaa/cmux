@@ -33,15 +33,15 @@ public final class CloudSendTimeline: Sendable {
     private let state = Mutex(State())
     private let log: @Sendable (String) -> Void
 
-    /// `log` takes each step's line (``stepLine(_:ms:at:)``); the app's log by default.
+    /// `log` takes each step's line (``stepLine(_:ms:at:)``); nil logs it to the app's log.
     public init(now: @escaping @Sendable () -> ContinuousClock.Instant = { .now },
-                log: @escaping @Sendable (String) -> Void = { CloudSendTimeline.logger.info("\($0, privacy: .public)") }) {
+                log: (@Sendable (String) -> Void)? = nil) {
         self.now = now
-        self.log = log
+        self.log = log ?? { Self.logger.info("\($0, privacy: .public)") }
         began = now()
     }
 
-    static let logger = Logger(subsystem: "com.cmuxterm.app.next", category: "cloud.start")
+    private static let logger = Logger(subsystem: "com.cmuxterm.app.next", category: "cloud.start")
 
     /// Each step's end, in milliseconds since the Send, in the order the steps ended; a step marked twice keeps its first end.
     public var marks: [(step: String, at: Int)] { state.withLock { $0.marks } }
