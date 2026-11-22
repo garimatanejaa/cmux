@@ -1021,7 +1021,7 @@ export function EnvironmentPicker({
         {list === "moves" && <div className="acpmux-env-heading">{t("composer.moveToMenu")}</div>}
         {list === "devices" && <div className="acpmux-env-heading">{t("composer.otherDevices")}</div>}
         {lastSeenStyle === "banner" && firstKeptRow !== undefined && lastSeenWhen !== undefined && (
-          <div className="acpmux-env-heading acpmux-env-last-seen-banner" role="status">
+          <output className="acpmux-env-heading acpmux-env-last-seen-banner">
             <span className="acpmux-env-last-seen-text">
               {t("composer.envCloudUnreachable", { when: lastSeenWhen })}
             </span>
@@ -1032,7 +1032,7 @@ export function EnvironmentPicker({
             >
               {t("composer.envCloudRetry")}
             </button>
-          </div>
+          </output>
         )}
         <Combobox
           suggestions={presence.rows}
