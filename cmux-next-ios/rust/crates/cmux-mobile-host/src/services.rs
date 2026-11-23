@@ -133,6 +133,8 @@ pub async fn serve(
         }
         "needs-you" => crate::needs_you::serve(&sender, receiver).await,
         "appearance" => crate::appearance::serve(&sender, receiver).await,
+        // Swift live code patches for a cmux Dev app on this phone (live_code.rs).
+        "live-code" => crate::live_code::serve(&sender, receiver).await,
         "appearance-wallpaper" => crate::appearance::serve_wallpaper(&sender, &args).await,
         "browser" => crate::browser::serve(&config.browser, &*config, &peer, &args, &sender, receiver).await,
         "surface" => crate::surface::serve(&config.surface, &*config, &peer, &args, &sender, receiver).await,
