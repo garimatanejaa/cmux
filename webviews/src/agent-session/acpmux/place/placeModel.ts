@@ -2,6 +2,7 @@
 // writes it from cmux-cloud-start-core `moves::place`, serde camelCase). Pure: parsing and wording
 // only. The decisions (when a move starts, when Auto moves, what carries) are Rust's.
 import type { StringKey } from "../i18n";
+import { hybridStartOf, type HybridStart } from "../hybrid/hybridModel";
 
 export type PlaceMode = "local" | "cloud" | "auto";
 export type PlaceAt = "local" | "cloud";
@@ -49,6 +50,9 @@ export interface PlaceState {
   readonly at: PlaceAt;
   readonly cloudName?: string;
   readonly move?: MoveView;
+  /// A hybrid start under way or just ended (RFD 0078): the chat started here while its Cloud
+  /// machine boots. The three-state control draws it.
+  readonly start?: HybridStart;
 }
 
 export type EvacuateChatState = "queued" | "moving" | "live" | "failed" | "cancelled";
@@ -154,11 +158,13 @@ export function placeOf(value: unknown): PlaceState | undefined {
   const raw = value as Record<string, unknown>;
   if (!(MODES as readonly unknown[]).includes(raw.mode)) return undefined;
   const move = moveOf(raw.move);
+  const start = hybridStartOf(raw.start);
   return {
     mode: raw.mode as PlaceMode,
     at: raw.at === "cloud" ? "cloud" : "local",
     ...(typeof raw.cloudName === "string" && raw.cloudName ? { cloudName: raw.cloudName } : {}),
     ...(move ? { move } : {}),
+    ...(start ? { start } : {}),
   };
 }
 
