@@ -713,6 +713,8 @@ async fn splice(
     let daemon_exposure = exposure.clone();
     let request_exposure = daemon_exposure.clone();
     let answers = Arc::clone(&pending);
+    // The daemon lane: when each output byte went to the phone (output_paint.rs).
+    let output_stamps = reply_phone.as_deref().map(crate::output_paint::Tracker::start);
     let mut from_daemon = tokio::spawn(async move {
         let mut reader = BufReader::with_capacity(64 * 1024, daemon_read);
         loop {
@@ -727,6 +729,9 @@ async fn splice(
                     let line = completed.answer(line);
                     let Some(line) = reply_policy.reply(line) else { continue };
                     let Some(line) = exposed_daemon_line(line, daemon_exposure.as_ref()) else { continue };
+                    if let Some(stamps) = &output_stamps {
+                        stamps.line(&line);
+                    }
                     if daemon_lines.send(line).await.is_err() {
                         return;
                     }

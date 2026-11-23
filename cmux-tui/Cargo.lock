@@ -2144,6 +2144,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmux-output-paint"
+version = "0.1.0"
+
+[[package]]
 name = "cmux-palette-eval"
 version = "0.1.0"
 dependencies = [
@@ -2828,6 +2832,7 @@ dependencies = [
  "cmux-link",
  "cmux-local-auth",
  "cmux-local-url",
+ "cmux-output-paint",
  "cmux-palette-ranker",
  "cmux-panic-log",
  "cmux-process",

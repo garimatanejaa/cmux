@@ -628,3 +628,6 @@ fn a_lines_viewer_gets_the_input_modes_frames_do_not_carry() {
 
 #[path = "phone_link_bench_tests.rs"]
 mod phone_link_bench;
+
+#[path = "output_to_paint_tests.rs"]
+mod output_to_paint;
