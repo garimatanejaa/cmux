@@ -177,7 +177,7 @@ test("a late chunk of the reply after its turn ended goes on in the same row", a
   try {
     for (
       let tries = 0;
-      tries < 200 && !rows.some((row) => row.kind === "assistant" && row.text?.includes("nothing"));
+      tries < 200 && !rows.some((row) => row.kind === "assistant" && row.inBackground === "bg-1" && row.text?.includes("nothing new"));
       tries += 1
     )
       await new Promise<void>((resolve) => {
