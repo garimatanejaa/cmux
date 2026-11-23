@@ -2698,6 +2698,7 @@ mod ephemeral;
 mod fanout;
 mod fix_from_link;
 mod forum;
+pub(crate) mod joined_capacity;
 mod media_forward;
 mod mesh_control_send;
 pub mod mesh_relay;
