@@ -131,7 +131,7 @@ extension AgentTabStore {
         // Where the chat runs and its move's progress, for the header's `place` (``CloudPlaceFlows``).
         tabs.placeState = { [weak services] record in
             guard let services, let record, let session = record.session else { return nil }
-            return services.cloud.place.placeJSON(session: session, onCloud: record.host.hasPrefix(MachineRegistry.registryHostPrefix), cloudName: record.hostName)
+            return services.cloud.place.placeJSON(session: session, onCloud: record.host.hasPrefix(MachineRegistry.registryHostPrefix), cloudName: record.hostName, starts: services.cloud.tuiState)
         }
         tabs.evacuateState = { [weak services] in services?.cloud.placeDriver?.evacuateJSON() }
         // Move to…: every Cloud machine of the account but the one the chat runs on, and this Mac for a
