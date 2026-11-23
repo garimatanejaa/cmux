@@ -140,6 +140,7 @@ await requireBrowserLane("subagent-pane-layout-motion.test.ts", async () => {
     subagent: boolean;
     pill?: Rect;
     row?: { id: string; rect: Rect };
+    tray?: { height: number; entering: boolean };
   };
   /// Starts sampling every frame into `window.__frames`, each tagged with `window.__step`, twice: as
   /// the frame painted it (`cmuxAfterPaint`, support/paintedFrames.ts) and as the frame's own
@@ -172,6 +173,12 @@ await requireBrowserLane("subagent-pane-layout-motion.test.ts", async () => {
           subagent: Boolean(document.querySelector("form[data-composer-relay]")),
           pill: rect(document.querySelector(".cv-subagent-of")),
           row: last ? { id: last.getAttribute("data-row-id") ?? "", rect: rect(last) } : undefined,
+          tray: (() => {
+            const tray = document.querySelector(".acpmux-running-tray:not(.acpmux-running-tray--ghost)");
+            return tray
+              ? { height: tray.getBoundingClientRect().height, entering: tray.hasAttribute("data-tray-enter") }
+              : undefined;
+          })(),
         });
       };
       w.__stop = w.cmuxAfterPaint(
@@ -291,6 +298,10 @@ await requireBrowserLane("subagent-pane-layout-motion.test.ts", async () => {
           `LAYOUT-MOTION subagent step=${name} ${JSON.stringify(value)} callbacksLastRow=${inCallbacks[name]?.lastRow ?? 0}`,
         );
       expect(all.some((frame) => frame.subagent)).toBe(true);
+      const trays = all.filter((frame) => frame.step === "to-chat" && frame.tray);
+      console.log(
+        `LAYOUT-MOTION subagent to-chat tray ${JSON.stringify(trays.slice(0, 6).map((frame) => frame.tray))}`,
+      );
       // Nothing moves but the composer's own growth while the prompt wraps.
       for (const name of ["open-subagent", "stream", "to-chat", "to-subagent"]) {
         expect({ step: name, composer: result[name]?.composer ?? 0 }).toEqual({ step: name, composer: 0 });
