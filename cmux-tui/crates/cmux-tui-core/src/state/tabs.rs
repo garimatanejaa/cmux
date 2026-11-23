@@ -150,7 +150,7 @@ impl Mux {
                 let value = upserted_value(&changes, "tab", &tab).ok_or(TabRowNotStored)?;
                 // The mark as stored: a stale request id leaves the old one.
                 let attention = match update.attention {
-                    Some(_) => Some(tab_attention_record(transaction, &tab, crate::mux::now_ms())?),
+                    Some(_) => Some(tab_attention_record(transaction, &tab, now_ms())?),
                     None => None,
                 };
                 let owner = browser.zip(update.owner);
