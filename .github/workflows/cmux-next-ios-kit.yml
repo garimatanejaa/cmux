@@ -275,7 +275,7 @@ jobs:
             --receipts .same-tree --audit-percent "$AUDIT_PERCENT" >> "$GITHUB_OUTPUT"
 
   animation-frames:
-    name: Animation frame budgets (fleet iPhone simulator)
+    name: Collect animation frames (fleet iPhone simulator)
     # The gateway accepts repository heads. Forks use the unprivileged kit-tests runner below.
     if: github.event_name == 'pull_request' && github.repository_owner == 'manaflow-ai' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.CI_EVAL_STEP_GATEWAY || 'ubuntu-24.04' }}
@@ -302,16 +302,66 @@ jobs:
           [[ -n "$step" ]] || { echo "::error::No simulator step receipt for $HEAD_SHA"; exit 1; }
           zip="$RUNNER_TEMP/animation-frames-$step.zip"
           "$client" artifact "$step" "$zip" || "$client" artifact --failed "$step" "$zip"
-          unzip -p "$zip" report.json > "$out/report.json"
-          unzip -p "$zip" animation-frames.md >> "$GITHUB_STEP_SUMMARY"
+          # Copy the compressed XCTest entries the report reads. The simulator app,
+          # build products and replay data stay in the fleet artifact.
+          zip -q -U "$zip" SUMMARY.md 'ui-duress-off-attachments/*' 'ui-duress-heavy-attachments/*' \
+            'ui-duress-off-tests*' 'ui-duress-heavy-tests*' 'duress/heavy/duress.json' --out "$out/evidence.zip"
           exit "$status"
 
-      - name: Upload the report and simulator receipt
+      - name: Upload frame evidence and simulator receipt
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: animation-frame-evidence
+          path: ${{ runner.temp }}/animation-frames-${{ github.run_id }}-${{ github.run_attempt }}
+          compression-level: 0
+          retention-days: 3
+
+  animation-frame-report:
+    name: Animation frame budgets (fleet iPhone simulator)
+    needs: animation-frames
+    if: ${{ !cancelled() && needs.animation-frames.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          sparse-checkout: scripts/measure/ios_animation_frames.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: animation-frame-evidence
+          path: ${{ runner.temp }}/frame-input
+
+      - name: Unpack the XCTest attachments and summaries
+        run: python3 -I -m zipfile -e "$RUNNER_TEMP/frame-input/evidence.zip" "$RUNNER_TEMP/frame-input"
+
+      - name: Write the frame report and check budgets
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          FLEET_RESULT: ${{ needs.animation-frames.result }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/frame-report"
+          mkdir -p "$out" "$RUNNER_TEMP/frame-input"
+          status=0
+          python3 -I scripts/measure/ios_animation_frames.py --evidence "$RUNNER_TEMP/frame-input" \
+            --out "$out/report.json" --sha "$HEAD_SHA" --run off --run heavy | tee "$out/report.md" >> "$GITHUB_STEP_SUMMARY" || status=$?
+          [[ "$FLEET_RESULT" == success ]] || { echo "::error::Fleet simulator job: $FLEET_RESULT"; exit 1; }
+          exit "$status"
+
+      - name: Upload the frame report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: animation-frames
-          path: ${{ runner.temp }}/animation-frames-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/frame-report
+          if-no-files-found: error
           retention-days: 14
 
   kit-tests:
