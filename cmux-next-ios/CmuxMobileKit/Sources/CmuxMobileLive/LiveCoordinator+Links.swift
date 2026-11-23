@@ -285,6 +285,10 @@ extension LiveCoordinator {
         // The Mac's theme and wallpaper, for as long as this link lives (ask-87d30da8e5).
         let appearance = self.appearance
         Task { await appearance.read(on: link, macID: macID) }
+        #if DEBUG
+        // Swift live code patches from the Mac, in cmux Dev launched by scripts/live-code/ios-device.sh.
+        Task.detached(priority: .utility) { await LiveCodeLinkFeed.read(on: link) }
+        #endif
         await chats.value
         guard session.currentLink === link else { return }
         // A failed chat channel is shown, not only logged.
