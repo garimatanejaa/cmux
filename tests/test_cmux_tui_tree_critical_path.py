@@ -333,6 +333,7 @@ def main():
     _check("build-ok" not in all_jobs, "no build-ok job between the build and publish")
     publish = all_jobs["publish"]
     base = dict(owns, **{"__needs__": needs(publish), "needs.build-linux.result": "success",
+                         "needs.build-linux-x86_64.result": "success",
                          "needs.build-darwin-fallback.result": "skipped",
                          "needs.darwin-fallback-plan.result": "skipped"})
     for build, fallback, recovered, expected in (("success", "skipped", "", True), ("failure", "success", "false", True),
@@ -345,19 +346,28 @@ def main():
         _check(evaluate(all_jobs["sentry-dsyms"]["if"], values) == expected,
                f"sentry-dsyms with build {build}, fallback {fallback}: {'runs' if expected else 'skipped'}")
     # MUSL_BUILT_ONCE: the Linux targets build once, fat, in build-linux; `build` builds only macOS.
-    # LINUX_CALL_FOR_CHANNEL: the early channel point needs build-linux, not the macOS legs.
+    # LINUX_CALL_FOR_CHANNEL: the early channel point needs a Linux call, not the macOS legs.
+    # LINUX_X86_64_FIRST: one call per Linux target; the early point needs the x86_64 one only, and
+    # point-machine-channel-early-linux both.
     calls = [n for n, j in all_jobs.items() if j.get("uses", "").endswith("cmux-tui-build-package.yml")]
     linux_calls = [n for n in calls if "linux" in str(all_jobs[n].get("with", {}).get("target_set", ""))]
-    _check(linux_calls == ["build-linux"], f"the musl targets build once, in build-linux ({linux_calls})")
-    _check(all_jobs["build-linux"]["with"]["lto"] == all_jobs["build"]["with"]["lto"],
-           "build-linux builds the shipped (fat) profile")
+    _check(linux_calls == ["build-linux-x86_64", "build-linux"],
+           f"the musl targets build once, in build-linux-x86_64 and build-linux ({linux_calls})")
+    for name in linux_calls:
+        _check(all_jobs[name]["with"]["lto"] == all_jobs["build"]["with"]["lto"],
+               f"{name} builds the shipped (fat) profile")
+        _check(all_jobs[name].get("secrets") == all_jobs["build"].get("secrets"),
+               f"{name} saves the R2 cargo cache as build does (feat-cmux-next pushes only)")
     early = all_jobs["point-machine-channel-early"]
-    _check(needs(early) == ["tree-preflight", "tree-owner-wait", "build-linux"],
-           f"point-machine-channel-early waits for the Linux legs only ({needs(early)})")
-    for build_linux, expected in (("success", True), ("failure", False), ("cancelled", False)):
-        values = dict(base, **{"needs.build-linux.result": build_linux, "needs.build.result": "success"})
-        _check(evaluate(publish["if"], values) == expected,
-               f"publish with build-linux {build_linux}: {'runs' if expected else 'skipped'}")
+    _check(needs(early) == ["tree-preflight", "tree-owner-wait", "build-linux-x86_64"],
+           f"point-machine-channel-early waits for the x86_64 Linux leg only ({needs(early)})")
+    _check(needs(all_jobs["point-machine-channel-early-linux"]) == ["tree-preflight", "tree-owner-wait", "build-linux-x86_64", "build-linux"],
+           "point-machine-channel-early-linux waits for both Linux legs, not macOS")
+    for leg in ("build-linux-x86_64", "build-linux"):
+        for build_linux, expected in (("success", True), ("failure", False), ("cancelled", False)):
+            values = dict(base, **{f"needs.{leg}.result": build_linux, "needs.build.result": "success"})
+            _check(evaluate(publish["if"], values) == expected,
+                   f"publish with {leg} {build_linux}: {'runs' if expected else 'skipped'}")
 
     # 3b. FALLBACK_AFTER_TIMEOUT: the macOS fallback is planned after a build that its timeout cancelled
     # (2026-11-13, run 43346255778: the leg on an owned Mac ended `cancelled`, the plan read only `failure`,
