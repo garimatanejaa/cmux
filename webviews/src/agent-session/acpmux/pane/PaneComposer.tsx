@@ -51,6 +51,7 @@ import { rememberNewChatPlace } from "../lastNewChatPlace";
 import { HarnessHealthNotice } from "../HarnessHealthNotice";
 import { Notice } from "../NoticeSlot";
 import { AutoResumeNotice } from "../AutoResumeNotice";
+import { OverloadNotice, useHostOverload } from "../OverloadNotice";
 import { liveAutoResume, type TurnPhase } from "../turnPhase";
 import { RulesNotice } from "../RulesNotice";
 import { composerShell, shellContextAttachments, type ShellRuns } from "../shell/shellRuns";
@@ -599,6 +600,12 @@ export function drawPaneComposer({
     return placed && "place" in placed && placed.place === "cloud" ? "cloud" : computerUsePlace;
   };
   const shownComputerUseAsk = computerUseAsked === computerUsePlace ? computerUseAsk : undefined;
+  // acpmux's verdict on this Mac's load and swap (host_overload.rs): drawn only when it says over.
+  const readOverload = useCallback(
+    () => directClient.current?.hostOverload() ?? Promise.reject(new Error("no client")),
+    [directClient],
+  );
+  const hostOverload = useHostOverload(readOverload);
   return (
     (readOnlySubagent || !reviewing) && (
       <>
@@ -768,6 +775,7 @@ export function drawPaneComposer({
                 {background.notice && t(BACKGROUND_NOTICE_TEXT[background.notice])}
               </output>
             </Notice>
+            <OverloadNotice state={hostOverload} />
             {!showNewTab && <AutoResumeNotice state={liveAutoResume(liveTurnPhase, snapshot.autoResume)} />}
             {!showNewTab && (
               <ShareNudge
