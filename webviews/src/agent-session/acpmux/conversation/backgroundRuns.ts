@@ -166,6 +166,10 @@ export function foldBackgroundRuns(rows: AcpmuxRow[], expanded: Folds, live = fa
       const row = rows[end]!;
       const kind = memberKind(row, inline);
       const written = kind ? undefined : harness(row);
+      // A failed subagent end waits on Retry in sight (lane/failed-subagents-group): harness rows never
+      // join a run with it, so a burst around it does not take it away.
+      if ((written && counts.failed > 0) || (kind === "failed" && harnessCounts.notifications + harnessCounts.reports + messageRows > 0))
+        break;
       if (written) {
         if (written === "notification") harnessCounts.notifications += 1;
         else if (written === "report") harnessCounts.reports += 1;
