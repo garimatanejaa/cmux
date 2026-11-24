@@ -138,19 +138,20 @@ public final class CloudPlaceDriver {
         place.beginEvacuation(direction: request.direction, chats: queue.map { ($0.session, $0.title) })
         // task-owner: one-shot; ends when the last move ends.
         Task { @MainActor in
-            var next = queue.makeIterator()
             await withTaskGroup(of: Void.self) { group in
-                @MainActor func launch() -> Bool {
-                    guard !self.place.evacuationStopped, let chat = next.next() else { return false }
+                // Up to `parallel` at once; each that ends starts the next, until Stop or the queue's end. (No nested
+                // function capturing the group: the region-based isolation checker refuses that pattern.)
+                var next = queue.makeIterator()
+                for _ in 0..<max(1, plan.parallel) {
+                    guard !self.place.evacuationStopped, let chat = next.next() else { break }
                     self.place.evacuationPhase(chat.session, .running)
-                    group.addTask { @MainActor in
-                        await self.moved(chat, toCloud: toCloud, trigger: .evacuate)
-                        self.place.evacuationPhase(chat.session, .ended)
-                    }
-                    return true
+                    group.addTask { @MainActor in await self.evacuated(chat, toCloud: toCloud) }
                 }
-                for _ in 0..<max(1, plan.parallel) { if !launch() { break } }
-                for await _ in group { _ = launch() }
+                while await group.next() != nil {
+                    guard !self.place.evacuationStopped, let chat = next.next() else { continue }
+                    self.place.evacuationPhase(chat.session, .running)
+                    group.addTask { @MainActor in await self.evacuated(chat, toCloud: toCloud) }
+                }
             }
         }
     }
@@ -181,6 +182,12 @@ public final class CloudPlaceDriver {
         guard let facts = host?.placeOwnFacts(session),
               let reply = CloudMoveCore().call("place_own_machine", Request(session: session, before: facts.before, machines: facts.machines), as: Reply.self) else { return nil }
         return reply.action == "reuse" ? reply.machine.map(CloudPlaceMachine.reuse) : .create
+    }
+
+    /// One chat of an evacuation: its move, then its row's end.
+    private func evacuated(_ chat: CloudPlaceChat, toCloud: Bool) async {
+        await moved(chat, toCloud: toCloud, trigger: .evacuate)
+        place.evacuationPhase(chat.session, .ended)
     }
 
     // MARK: Auto
