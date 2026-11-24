@@ -459,6 +459,7 @@ pub mod subsessions;
 pub use permission_groups::PERMISSION_GROUP_OPERATIONS;
 pub use subsession_send::Delivery;
 mod background_cause;
+mod command_end;
 pub mod background_turn;
 #[cfg(test)]
 mod background_turn_end_tests;
