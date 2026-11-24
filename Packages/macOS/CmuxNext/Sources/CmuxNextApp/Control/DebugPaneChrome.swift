@@ -22,7 +22,7 @@ enum DebugPaneChrome {
                 let cell = topLeft(ring.frameInWindow)
                 let border = topLeft(ring.contentInWindow)
                 let strip = topLeft(view.stripView.convert(view.stripView.bounds, to: nil))
-                let pill = view.stripView.firstTabPillFrame.map { topLeft(view.stripView.convert($0, to: nil)) }
+                let pill = view.stripView.firstTabPillFrame.map { topLeft(view.stripView.convert($0, to: nil)) }, stripEmpty = view.stripView.emptyStripSpace.map { topLeft(view.stripView.convert($0, to: nil)) }
                 var firstCell: CGPoint?
                 if case .terminal(let entry)? = pane.currentContent, entry.session.view.window === window {
                     let host = entry.session.view
@@ -31,14 +31,9 @@ enum DebugPaneChrome {
                     let hostRect = topLeft(host.convert(host.bounds, to: nil))
                     firstCell = CGPoint(x: hostRect.minX + origin.x, y: hostRect.minY + origin.y)
                 }
-                // Typed apart from the literal: inline, this closure crashed the type checker (signal 6).
-                var stripEmpty = JSONValue.null
-                if let space = view.stripView.emptyStripSpace {
-                    stripEmpty = rect(topLeft(view.stripView.convert(space, to: nil)))
-                }
                 var fields: [String: JSONValue] = [
                     "pane": .string(ring.pane), "cell": rect(cell),
-                    "strip": rect(strip), "strip_empty": stripEmpty, "strip_under_page": .array(view.stripView.chromiumPageCover.map { rect(topLeft($0)) }),
+                    "strip": rect(strip), "strip_empty": stripEmpty.map(rect) ?? .null, "strip_under_page": .array(view.stripView.chromiumPageCover.map { rect(topLeft($0)) }),
                     "border": rect(border), "pill": pill.map(rect) ?? .null,
                     "first_cell": firstCell.map { .array([.number(Double($0.x)), .number(Double($0.y))]) } ?? .null,
                     // The tab bar (cx-soza): hidden now, the pane's own choice, the palette row's title.
