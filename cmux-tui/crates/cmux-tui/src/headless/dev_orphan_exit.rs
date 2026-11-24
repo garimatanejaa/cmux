@@ -376,7 +376,7 @@ impl OrphanFacts for OwnerFacts {
 
     fn app_closed(&self) -> bool {
         let frontend_seen =
-            self.mux.upgrade().is_some_and(|mux| mux.control_clients_frontend_seen());
+            self.mux.upgrade().is_some_and(|mux| mux.frontend_seen());
         self.app.as_ref().is_some_and(|app| app.closed(frontend_seen))
     }
 }

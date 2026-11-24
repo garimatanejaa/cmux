@@ -119,6 +119,11 @@ impl Mux {
         self.control_clients.frontend_seen()
     }
 
+    /// Whether the app's frontend (role `main`) connected since this owner started.
+    pub fn frontend_seen(&self) -> bool {
+        self.control_clients.frontend_seen()
+    }
+
     /// Live hosted terminals (launching, adopting or running).
     pub fn live_terminal_count(&self) -> anyhow::Result<usize> {
         Ok(self
