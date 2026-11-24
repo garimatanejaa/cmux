@@ -1,0 +1,8 @@
+{"envs":[["light","none"],["dark","none"]],
+ "shots":[
+  {"name":"before","entry":"agent-pane.queue-system-notes","variant":"before","width":760,"height":420,"deviceScaleFactor":2,"clip":".acpmux-composer","arms":{"now":""}},
+  {"name":"band","entry":"agent-pane.queue-system-notes","variant":"band","width":760,"height":420,"deviceScaleFactor":2,"clip":".acpmux-composer","arms":{"now":""}},
+  {"name":"band-hover","entry":"agent-pane.queue-system-notes","variant":"band","width":760,"height":420,"deviceScaleFactor":2,"clip":".acpmux-composer","hover":"[data-prompt-id=\"p-own\"]","arms":{"now":""}},
+  {"name":"below","entry":"agent-pane.queue-system-notes","variant":"below","width":760,"height":420,"deviceScaleFactor":2,"clip":".acpmux-composer","arms":{"now":""}},
+  {"name":"summary","entry":"agent-pane.queue-system-notes","variant":"summary","width":760,"height":420,"deviceScaleFactor":2,"clip":".acpmux-composer","arms":{"now":""}}
+ ]}
