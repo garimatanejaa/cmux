@@ -197,7 +197,7 @@ public final class TerminalFindController {
     }
 
     /// Whether this search goes to the daemon.
-    var historyActive: Bool { target?.historyFind != nil && !historyUnavailable }
+    var historyActive: Bool { false } // scratch: the controller change reverted
 
     func resetResults() {
         searchGeneration += 1
