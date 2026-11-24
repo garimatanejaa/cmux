@@ -353,7 +353,7 @@ export function EnvironmentPicker({
   // read at a glance, and the main list is two rows. A new chat's list searches once its machines
   // are many, across every level (what is typed also finds an agent machine).
   const machineList = list === "machines" || listRows === "machines";
-  const searchable = offersDevices
+  const searchable = offersDevices && list !== "machines"
     ? false
     : machineList && environments.length + listedSaved.length >= ENVIRONMENT_SEARCH_MIN;
   const words = useMemo(() => query.trim().toLowerCase().split(/\s+/).filter(Boolean), [query]);
@@ -718,9 +718,18 @@ export function EnvironmentPicker({
     onPick,
     persistent,
     cloudPicked: clouded,
+    autoPicked: autoSelected,
     manual: auto?.onManual,
   });
-  latest.current = { places, current: checkedRow, onPick, persistent, cloudPicked: clouded, manual: auto?.onManual };
+  latest.current = {
+    places,
+    current: checkedRow,
+    onPick,
+    persistent,
+    cloudPicked: clouded,
+    autoPicked: autoSelected,
+    manual: auto?.onManual,
+  };
   useMachineRefresh(open, onOpen);
 
   const close = () => {
@@ -752,6 +761,8 @@ export function EnvironmentPicker({
       if (!openRef.current && !(scope && active && scope.contains(active))) return;
       const environment = latest.current.places[digit - 1];
       if (environment === "auto") {
+        // Auto picked already, a closed picker leaves the key to the app, as Cloud only does.
+        if (!openRef.current && latest.current.autoPicked) return;
         event.preventDefault();
         event.stopPropagation();
         pickAutoRef.current();
@@ -1115,7 +1126,7 @@ export function EnvironmentPicker({
               )}
               {/* A machine of a new chat's list says how many sessions run on it now, or nothing: "SSH"
                   said the same on every row. */}
-              {offersDevices && liveLabel(environment) && (
+              {offersDevices && list !== "machines" && liveLabel(environment) && (
                 <span className="acpmux-menu-description">{liveLabel(environment)}</span>
               )}
             </span>
@@ -1131,10 +1142,10 @@ export function EnvironmentPicker({
             {ready &&
               !environment.loadWarning &&
               environment.kind !== "local" &&
-              (environment.connected !== undefined || offersDevices) && (
-                <span className="acpmux-env-status" data-connected={String(offersDevices || environment.connected)}>
+              (environment.connected !== undefined || (offersDevices && list !== "machines")) && (
+                <span className="acpmux-env-status" data-connected={String((offersDevices && list !== "machines") || environment.connected)}>
                   <span className="acpmux-env-status-text">
-                    {t(offersDevices || environment.connected ? "composer.envConnected" : "composer.envNotConnected")}
+                    {t((offersDevices && list !== "machines") || environment.connected ? "composer.envConnected" : "composer.envNotConnected")}
                   </span>
                 </span>
               )}
