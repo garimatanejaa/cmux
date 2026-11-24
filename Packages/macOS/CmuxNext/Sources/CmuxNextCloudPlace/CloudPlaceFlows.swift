@@ -1,8 +1,8 @@
 import CmuxNextCloud
 import CmuxNextCompat
 import CmuxNextWakeups
-import Foundation
-import Observation
+public import Foundation
+public import Observation
 
 /// Where each chat runs and how its move to or from Cloud is going, as the chat's header shows it.
 /// Swift only carries facts and draws: the move's state machine, its view (labels, budget, what
