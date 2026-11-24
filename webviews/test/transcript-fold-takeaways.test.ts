@@ -155,7 +155,7 @@ test("a substantive answer with a table stays visible before a tool and its shor
   ]);
 });
 
-test("completed compactions fold, while subagent lifecycle lines and refusals stay available", () => {
+test("completed compactions and a subagent's end fold, while refusals stay available", () => {
   const rows = [
     row("u", "user"),
     ran("read"),
@@ -174,7 +174,6 @@ test("completed compactions fold, while subagent lifecycle lines and refusals st
   expect(drawn(rows)).toEqual([
     "user:u",
     "worked:worked-u",
-    "subagentDone:cef-done",
     "notice:refused",
     "assistant:final",
     "turnSummary:end",
