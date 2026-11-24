@@ -94,7 +94,7 @@ pub fn entries(families: &[Family]) -> Vec<Entry> {
         if family.per_child {
             let Ok(children) = std::fs::read_dir(&family.root) else { continue };
             let mut paths: Vec<PathBuf> =
-                children.flatten().map(|child| child.path()).filter(|p| real_dir(p)).collect();
+                children.flatten().map(std::fs::DirEntry::path).filter(|p| real_dir(p)).collect();
             paths.sort();
             for path in paths {
                 let last_activity_ms = last_activity(&path);

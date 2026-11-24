@@ -156,7 +156,8 @@ pub fn repositories(roots: &[PathBuf], extra: &[PathBuf], guarded: &Guarded) -> 
     for root in roots {
         candidates.push(root.clone());
         if let Ok(entries) = std::fs::read_dir(root) {
-            let mut children: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+            let mut children: Vec<PathBuf> =
+                entries.flatten().map(std::fs::DirEntry::path).collect();
             children.sort();
             candidates.extend(children);
         }
@@ -783,7 +784,7 @@ fn data_bytes<'a>(
                 nested = path.strip_prefix(root).ok().map(|p| p.display().to_string());
             }
             if let Ok(children) = std::fs::read_dir(&path) {
-                stack.extend(children.flatten().map(|child| child.path()));
+                stack.extend(children.flatten().map(std::fs::DirEntry::path));
             }
         } else {
             total = total.saturating_add(meta.len());

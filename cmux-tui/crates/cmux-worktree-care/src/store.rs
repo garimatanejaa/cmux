@@ -94,7 +94,7 @@ impl Store {
         let Ok(entries) = std::fs::read_dir(&self.dir) else { return Vec::new() };
         let mut manifests: Vec<Manifest> = entries
             .flatten()
-            .map(|entry| entry.path())
+            .map(std::fs::DirEntry::path)
             .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
             // The finished-answer memo shares this directory but is not a
             // manifest. In particular, do not read it here: FinishedMemo
