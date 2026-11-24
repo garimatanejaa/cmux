@@ -499,7 +499,7 @@ fn each_process_path(f: &mut dyn FnMut(u32, String, PathBuf)) -> bool {
     if count <= 0 {
         return false;
     }
-    let mut pids = vec![0 as libc::c_int; count as usize + 64];
+    let mut pids: Vec<libc::c_int> = vec![0; count as usize + 64];
     // SAFETY: the buffer holds `pids.len()` ints and its size in bytes is passed.
     let count = unsafe {
         libc::proc_listallpids(pids.as_mut_ptr().cast(), (pids.len() * int) as libc::c_int)
