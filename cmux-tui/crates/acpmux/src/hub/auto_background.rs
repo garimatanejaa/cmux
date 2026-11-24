@@ -62,6 +62,71 @@ pub(super) const AUTO_BACKGROUND_AFTER: std::time::Duration = std::time::Duratio
 pub(super) const MESSAGE_BACKGROUND_AFTER: std::time::Duration =
     std::time::Duration::from_secs(120);
 
+/// The per-command waits learned from the transcripts (`tools/auto_background_table.py`, nightly):
+/// `{"prefixes": {"glaeda-gh status": 240, ...}}` in seconds, at `ACPMUX_AUTO_BACKGROUND_TABLE` or
+/// `~/.config/acpmux/auto-background.json`. A command that starts with a prefix (the longest wins)
+/// waits that long instead of the default; none, or no file, waits the default. Read again when
+/// the file changes.
+pub const AUTO_BACKGROUND_TABLE_ENV: &str = "ACPMUX_AUTO_BACKGROUND_TABLE";
+
+#[derive(Default, Clone)]
+struct WaitTable(Vec<(String, std::time::Duration)>);
+
+impl WaitTable {
+    fn parse(text: &str) -> Self {
+        let mut rows: Vec<(String, std::time::Duration)> = serde_json::from_str::<Value>(text)
+            .ok()
+            .and_then(|v| v.get("prefixes").and_then(Value::as_object).cloned())
+            .into_iter()
+            .flatten()
+            .filter_map(|(k, v)| {
+                let secs = v.as_u64().filter(|s| *s > 0)?;
+                Some((k, std::time::Duration::from_secs(secs)))
+            })
+            .collect();
+        rows.sort_by_key(|(k, _)| std::cmp::Reverse(k.len()));
+        Self(rows)
+    }
+
+    /// The wait for `command`: its longest matching prefix's, after its leading `cd DIR &&`.
+    fn wait_for(&self, command: &str) -> Option<std::time::Duration> {
+        let mut c = command.trim_start();
+        while let Some(rest) = c.strip_prefix("cd ") {
+            match rest.split_once("&&").or_else(|| rest.split_once(';')) {
+                Some((_, tail)) => c = tail.trim_start(),
+                None => break,
+            }
+        }
+        self.0.iter().find(|(k, _)| c.starts_with(k.as_str())).map(|(_, d)| *d)
+    }
+}
+
+fn table_path() -> Option<std::path::PathBuf> {
+    match std::env::var_os(AUTO_BACKGROUND_TABLE_ENV) {
+        Some(p) if !p.is_empty() => Some(p.into()),
+        _ => dirs::home_dir().map(|h| h.join(".config/acpmux/auto-background.json")),
+    }
+}
+
+/// The table now, from the file's last read while it is unchanged.
+fn current_table() -> WaitTable {
+    static CACHE: std::sync::Mutex<Option<(std::time::SystemTime, WaitTable)>> =
+        std::sync::Mutex::new(None);
+    let Some(path) = table_path() else { return WaitTable::default() };
+    let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
+        return WaitTable::default();
+    };
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, table)) = cache.as_ref()
+        && *at == modified
+    {
+        return table.clone();
+    }
+    let table = std::fs::read_to_string(&path).map(|t| WaitTable::parse(&t)).unwrap_or_default();
+    *cache = Some((modified, table.clone()));
+    table
+}
+
 /// How long the person's message waits for the translator's list of foreground calls.
 const FOREGROUND_ASK: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -226,6 +291,9 @@ impl Hub {
         let Some(params) = params else { return };
         let Some(update) = params.get("update") else { return };
         let Some(tool) = foreground_shell(update) else { return };
+        // A learned wait for this command's kind, else the default.
+        let command = update.pointer("/rawInput/command").and_then(Value::as_str).unwrap_or("");
+        let after = current_table().wait_for(command).unwrap_or(after);
         if declared_timeout(update).is_some_and(|wait| wait > after) {
             return;
         }
@@ -313,6 +381,19 @@ mod tests {
         assert_eq!(after_of(Some("90")), Some(std::time::Duration::from_secs(90)));
         assert_eq!(after_of(Some("0")), None);
         assert_eq!(after_of(Some("soon")), Some(AUTO_BACKGROUND_AFTER));
+    }
+
+    #[test]
+    fn the_longest_matching_prefix_sets_the_wait() {
+        let t = WaitTable::parse(
+            r#"{"prefixes": {"glaeda-gh": 100, "glaeda-gh status": 240, "bad": 0}}"#,
+        );
+        let secs = |c: &str| t.wait_for(c).map(|d| d.as_secs());
+        assert_eq!(secs("glaeda-gh status pr x"), Some(240));
+        assert_eq!(secs("cd /tmp && glaeda-gh land x"), Some(100));
+        assert_eq!(secs("make"), None);
+        assert_eq!(secs("bad"), None);
+        assert!(WaitTable::parse("not json").0.is_empty());
     }
 
     #[test]
