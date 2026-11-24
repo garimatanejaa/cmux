@@ -334,20 +334,6 @@ final class CloudService {
                 await self.refresh()
             }
         })
-        // After sleep the list is stale even with cmux in front: the idle
-        // auto-pause may have parked machines while the lid was closed.
-        observers.append(Task { [weak self] in
-            for await note in NSWorkspace.shared.notificationCenter.notifications(named: nil) {
-                switch note.name {
-                case NSWorkspace.didWakeNotification:
-                    self?.placeDriver?.slept(false)
-                    await self?.refresh(ifOlderThan: .seconds(30))
-                // Auto starts its moves as the system is about to sleep.
-                case NSWorkspace.willSleepNotification: self?.placeDriver?.slept(true)
-                default: continue
-                }
-            }
-        })
         // A sign-out or a team switch (the user signed in may stay) ends start-session asks and
         // runs: none goes on in the account signed in after.
         observers.append(Task { [weak self] in
@@ -529,6 +515,14 @@ final class CloudService {
             machines.cloudLimits = limits
             logger.info("plan: \(limits?.planId ?? "unreadable", privacy: .public) pays=\(limits?.paysForCloud == true, privacy: .public)")
         }
+    }
+
+    /// The system is about to sleep (true) or woke (false), told by the app's one sleep/wake observer (FeedService's presence).
+    /// Auto starts its moves before sleep; after it the list is stale even with cmux in front (the idle auto-pause may have parked machines).
+    func systemSlept(_ asleep: Bool) {
+        placeDriver?.slept(asleep)
+        // task-owner: one refresh after a wake; ends with it.
+        if !asleep { Task { await refresh(ifOlderThan: .seconds(30)) } }
     }
 
     /// ``refresh()`` unless the list was read within `age`; true when the store then holds a list

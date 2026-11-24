@@ -132,7 +132,7 @@ final class AppServices {
     /// The feed: the daemon's feed client (`feed.*`) and the app's presence, GitHub setting and API calls.
     private(set) lazy var feed: FeedService = FeedService(
         auth: cloud.auth, local: daemon, approvalHolds: cloud.approvalHolds,
-        appActive: { [weak self] in self?.appActiveSource() ?? false }
+        appActive: { [weak self] in self?.appActiveSource() ?? false }, slept: { [weak self] in self?.cloud.systemSlept($0) }
     )  // first read in init (no IUO)
     /// The team's Cloud workspaces and chats (lane D): the Team section, `cmux cloud team-*`, links and the publisher.
     private(set) lazy var cloudTeam = CloudTeamFeature(host: self)
