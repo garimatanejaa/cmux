@@ -290,6 +290,14 @@ pub async fn connect_local_inner(
 mod tests {
     use super::*;
 
+    /// The ads and pins are one process-wide table, and `local_link_forget_all` empties all of
+    /// it: the tests that read or clear it take turns.
+    static TABLE: Mutex<()> = Mutex::new(());
+
+    fn table() -> std::sync::MutexGuard<'static, ()> {
+        TABLE.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn txt(pairs: &[(&str, &str)]) -> Vec<LocalTxt> {
         pairs.iter().map(|(k, v)| LocalTxt { key: (*k).into(), value: (*v).into() }).collect()
     }
@@ -306,6 +314,7 @@ mod tests {
 
     #[test]
     fn a_found_ad_is_nearby_only_for_its_mac_and_key() {
+        let _table = table();
         let tag = local::key_tag(b"mac-key");
         let ad = txt(&[("id", "mac-A"), ("v", "1"), ("k", &tag)]);
         let here = vec![LocalEndpoint { host: "10.0.0.9".into(), port: 4000 }];
@@ -332,6 +341,7 @@ mod tests {
 
     #[test]
     fn a_network_change_forgets_every_ad() {
+        let _table = table();
         let ad = txt(&[("id", "mac-roam"), ("v", "1")]);
         let here = vec![LocalEndpoint { host: "10.0.0.9".into(), port: 4000 }];
         assert!(local_link_observe("Mac Roam".into(), ad.clone(), here.clone()));
