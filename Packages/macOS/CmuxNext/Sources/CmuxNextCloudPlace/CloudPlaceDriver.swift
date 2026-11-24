@@ -130,19 +130,22 @@ public final class CloudPlaceDriver {
         place.beginEvacuation(direction: request.direction, chats: queue.map { ($0.session, $0.title) })
         // task-owner: one-shot; ends when the last move ends.
         Task { @MainActor in
-            var next = queue.makeIterator()
             await withTaskGroup(of: Void.self) { group in
-                @MainActor func launch() -> Bool {
-                    guard !self.place.evacuationStopped, let chat = next.next() else { return false }
+                var running = 0
+                let width = max(1, plan.parallel)
+                for chat in queue {
+                    if running == width {
+                        _ = await group.next()
+                        running -= 1
+                    }
+                    if self.place.evacuationStopped { break }
                     self.place.evacuationPhase(chat.session, .running)
                     group.addTask { @MainActor in
                         await self.moved(chat, toCloud: toCloud, trigger: .evacuate)
                         self.place.evacuationPhase(chat.session, .ended)
                     }
-                    return true
+                    running += 1
                 }
-                for _ in 0..<max(1, plan.parallel) { if !launch() { break } }
-                for await _ in group { _ = launch() }
             }
         }
     }
