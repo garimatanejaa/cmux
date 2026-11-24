@@ -643,7 +643,7 @@ test("Edit on Auto opens the team's Default in a team's context, and the persona
     await mount({ flag: true, mode: "cloud" });
     await flush();
     await openChip();
-    await act(async () => row(t("composer.envEdit", { name: "Default" }))!.click());
+    await act(async () => row(t("composer.envEditDefault"))!.click());
     const request = editor.cloudEnvironmentRequest();
     expect(request?.environmentId).toBe(expected);
     expect(request?.section).toBe("script");
