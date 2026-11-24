@@ -1,0 +1,10 @@
+{
+  "date": "2026-11-24",
+  "row": "observer_sites",
+  "allow": 1,
+  "why": "Auto (#51824) must start its moves as the Mac is about to sleep and stop treating it as asleep on wake. #51824 observed both with one notifications(named: nil) loop, which does not compile (Notification.Name is not optional) and so never counted. One named async loop per name, beside CloudService's existing loops, is the honest cost. The only other willSleep observer in CmuxNextApp is FeedService's presence MainActorObservation, which has no reference to CloudService; fanning Cloud's place driver out of it would tie Feed presence to Cloud move scheduling.",
+  "author": "rfd72 into-auto lane (claude opus)",
+  "owner": "rfd72 into-auto lane: fold into a shared app sleep/wake adapter when one exists",
+  "receipt": "Review (claude opus, independent read-only subagent a85386a75b30262e7): SHIP at ef50bdbe123afd299992016f5a0563c8bf32595e",
+  "expiry": "2026-12-24"
+}
