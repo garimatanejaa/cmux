@@ -128,25 +128,28 @@ public final class CloudPlaceDriver {
         let queue = plan.moves.compactMap { session in all.first { $0.session == session } }
         guard !queue.isEmpty else { return }
         place.beginEvacuation(direction: request.direction, chats: queue.map { ($0.session, $0.title) })
-        // task-owner: one-shot; ends when the last move ends.
+        // task-owner: one-shot; ends once the last move has started (each move is its own task).
         Task { @MainActor in
-            await withTaskGroup(of: Void.self) { group in
-                var running = 0
-                let width = max(1, plan.parallel)
-                for chat in queue {
-                    if running == width {
-                        _ = await group.next()
-                        running -= 1
-                    }
-                    if self.place.evacuationStopped { break }
-                    self.place.evacuationPhase(chat.session, .running)
-                    group.addTask { @MainActor in
-                        await self.moved(chat, toCloud: toCloud, trigger: .evacuate)
-                        self.place.evacuationPhase(chat.session, .ended)
-                    }
-                    running += 1
+            let (ends, end) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingOldest(queue.count))  // one end per move: never drops
+            var nextEnd = ends.makeAsyncIterator()
+            var running = 0
+            let width = max(1, plan.parallel)
+            for chat in queue {
+                if running == width {
+                    _ = await nextEnd.next()
+                    running -= 1
                 }
+                if self.place.evacuationStopped { break }
+                self.place.evacuationPhase(chat.session, .running)
+                // task-owner: one move of this run; signals `end` when it ends.
+                Task { @MainActor in
+                    await self.moved(chat, toCloud: toCloud, trigger: .evacuate)
+                    self.place.evacuationPhase(chat.session, .ended)
+                    end.yield()
+                }
+                running += 1
             }
+            end.finish()
         }
     }
 
