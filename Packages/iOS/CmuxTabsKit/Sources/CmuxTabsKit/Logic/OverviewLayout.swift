@@ -120,6 +120,25 @@ struct OverviewLayout: Equatable, Sendable {
         return card(index).offsetBy(dx: origin.x, dy: origin.y)
     }
 
+    /// The grid's scale while it zooms in: 1.06 hidden, 1 shown (Safari's
+    /// grid settles back as the page shrinks into it).
+    static func zoomScale(shown: Double) -> CGFloat {
+        let s = CGFloat(min(1, max(0, shown)))
+        return 1.06 - 0.06 * s
+    }
+
+    /// `rect` (screen, at the grid's resting scale) where the grid draws it
+    /// now: scaled about the screen's center like the grid. The zoom aims at
+    /// this, computed in the same frame, so the page lands on its cell as the
+    /// neighbours do, with no frame-late origin read through the scale.
+    func zoomScaled(_ rect: CGRect, shown: Double) -> CGRect {
+        let k = Self.zoomScale(shown: shown)
+        guard k != 1 else { return rect }
+        let cx = size.width / 2, cy = size.height / 2
+        return CGRect(x: cx + (rect.minX - cx) * k, y: cy + (rect.minY - cy) * k,
+                      width: rect.width * k, height: rect.height * k)
+    }
+
     /// Whether the card and its title row are fully on screen between the
     /// top controls and the bottom bar.
     func isFullyVisible(_ index: Int, offset: CGFloat) -> Bool {

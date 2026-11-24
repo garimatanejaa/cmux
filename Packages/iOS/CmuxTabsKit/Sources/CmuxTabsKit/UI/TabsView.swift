@@ -64,7 +64,7 @@ struct TabsScreen<Source: TabsDataSource>: View {
     /// re-evaluate this screen and every card; only the views that read it
     /// (the zoom while it runs, the live page following its card) update.
     @State private var gridScroll = GridScrollTracker()
-    private var gridContentOrigin: CGPoint? { gridScroll.contentOrigin }
+    private var gridContentOrigin: CGPoint? { gridScroll.screenOrigin }
     private var overviewScroll: CGFloat { gridScroll.offset }
     /// The active tab shown on the settled grid by its static card
     /// (`TabsDataSource.showStaticCard(for:)`).
@@ -584,7 +584,7 @@ struct TabsScreen<Source: TabsDataSource>: View {
         if let id = newTabZoomID, id == zoomTabId {
             guard newTabZoom.fromLoneSlot else { return newTabZoom.rect(in: fullRect) }
             let lone = OverviewLayout(size: size, safeTop: gridSafeTop, safeBottom: gridSafeBottom, count: 1, columns: overviewColumns)
-            return lone.zoomEndpoint(0, contentOrigin: gridContentOrigin, fallbackOffset: overviewScroll)
+            return lone.zoomScaled(lone.zoomEndpoint(0, contentOrigin: gridContentOrigin, fallbackOffset: overviewScroll), shown: overviewShown)
         }
         let index: Int
         if zoomTabId == TabsScreenSpace.newTabMarker {
@@ -593,7 +593,7 @@ struct TabsScreen<Source: TabsDataSource>: View {
             index = zoomTabId.flatMap { id in tabs.firstIndex { $0.id == id } } ?? (activeIndex ?? 0)
         }
         let grid = OverviewLayout(size: size, safeTop: gridSafeTop, safeBottom: gridSafeBottom, count: max(tabs.count, index + 1), pinned: pinnedCount, columns: overviewColumns)
-        return grid.zoomEndpoint(index, contentOrigin: gridContentOrigin, fallbackOffset: overviewScroll)
+        return grid.zoomScaled(grid.zoomEndpoint(index, contentOrigin: gridContentOrigin, fallbackOffset: overviewScroll), shown: overviewShown)
     }
 
     // MARK: Address editing
@@ -660,7 +660,7 @@ struct TabsScreen<Source: TabsDataSource>: View {
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) { overviewPosition = ScrollPosition(y: offset) }
-            // Until the scroll view reports it, the fallback endpoint uses it too.
+            // The zoom aims at the new slot from its first frame.
             gridScroll.offset = offset
         }
     }
