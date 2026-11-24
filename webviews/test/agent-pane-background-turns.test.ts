@@ -19,7 +19,9 @@ import {
   turnFoldFor,
   turnView,
   turnViewFrom,
+  WORKED,
 } from "../src/agent-session/acpmux/conversation/turns";
+import { backgroundRunRowId } from "../src/agent-session/acpmux/conversation/backgroundRuns";
 import { withSubagentLines } from "../src/agent-session/acpmux/subagents/runningTray";
 import { SUBAGENT_DONE } from "../src/agent-session/acpmux/subagents/subagentRows";
 import { SubagentDoneLine } from "../src/agent-session/acpmux/subagents/SubagentDoneLine";
@@ -315,7 +317,11 @@ test("a subagent's done line folds with its quiet background turn", async () => 
     const done = tray.find((row) => row.kind === SUBAGENT_DONE)!;
     expect(done.inBackground).toBe("bg9");
     expect(drawn([...tray]).some((row) => row.kind === SUBAGENT_DONE)).toBe(false);
-    expect(drawn([...tray], [backgroundTurnRowId("bg9")]).some((row) => row.kind === SUBAGENT_DONE)).toBe(true);
+    // The done line is a member of the run with its quiet background turn (a subagent's end counts as a
+    // tool call's end, steeredHarnessEvents.test.tsx): opening the run shows it.
+    const run = backgroundRunRowId(backgroundTurnRowId("bg9"));
+    expect(drawn([...tray]).find((row) => row.id === run)?.backgroundRun?.rows).toContain(done.id);
+    expect(drawn([...tray], [run]).some((row) => row.kind === SUBAGENT_DONE)).toBe(true);
   } finally {
     client.close();
   }
@@ -1133,12 +1139,19 @@ test("a background turn's long reply is the agent's own turn, never the subagent
     for (const [index, { row, at }] of own.entries()) {
       // Its own footer right under it, the turn's end, as a prompt's turn ends.
       expect(view[at + 1]).toMatchObject({ kind: "turnSummary", id: `${BACKGROUND_END}-bg-${index + 1}` });
-      // It opens a turn: the turn gap over it, from whatever row is above.
-      const prev = view[at - 1]!;
-      expect(transcriptGap(gridMark(prev, view[at - 2]), gridMark(row, prev))).toBe(TRANSCRIPT_TURN_GAP);
+      // It opens a turn: the turn gap over it (over the first, the "Worked for" that opens its turn),
+      // from whatever row is above.
+      const top = index === 0 ? at - 1 : at;
+      const prev = view[top - 1]!;
+      expect(transcriptGap(gridMark(prev, view[top - 2]), gridMark(view[top]!, prev))).toBe(TRANSCRIPT_TURN_GAP);
     }
-    // The first follows the subagent's done line, not inside it.
-    expect(view[own[0]!.at - 1]?.kind).toBe(SUBAGENT_DONE);
+    // The subagent's end is the first turn's work, a tool call's end: it folds under that turn's
+    // "Worked for" (Leo, 2026-11-24: "we can indeed treat them as tool calls"), and opens to it.
+    const worked = view[own[0]!.at - 1]!;
+    expect(worked.kind).toBe(WORKED);
+    expect(view.some((entry) => entry.kind === SUBAGENT_DONE)).toBe(false);
+    const opened = drawn([...withSubagentLines(rows(), new Map())], [worked.id]);
+    expect(opened.some((entry) => entry.kind === SUBAGENT_DONE)).toBe(true);
   } finally {
     client.close();
   }
