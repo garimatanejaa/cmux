@@ -4190,11 +4190,16 @@ button.cv-tool:not(.cv-sent, :disabled):is(:hover, :focus-visible):not(:has(.cv-
    line"): cut to one line with an ellipsis while closed, wrapped while open, the same words broken at
    the same places either way, so opening moves none of them. ThoughtRow.tsx sizes it between the two
    over the fold's time; `is-closing` keeps the wrapped words until it is one line tall again. */
+/* The room that centres the line in the taller row is margin, never padding: the clamp keeps the
+   cut lines in the box and `overflow: hidden` clips at the padding edge, so a padded line showed the
+   top of its second line in the padding under it, over the gap to the next row (cmux#52930). The box
+   is the line itself, one line tall closed. test/thought-row-one-line-browser.test.ts. */
 .cv-thought__preview {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 1;
-  padding-block: calc((var(--cv-tool-row-height) - var(--cv-thought-pitch)) / 2);
+  margin-block: calc((var(--cv-tool-row-height) - var(--cv-thought-pitch)) / 2);
+  padding-block: 0;
   color: var(--cv-text-muted);
   white-space: normal;
   overflow-wrap: anywhere;
