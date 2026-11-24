@@ -77,18 +77,23 @@ import Testing
         next.displayIfNeeded()
         let fill = play.layer?.backgroundColor.flatMap(NSColor.init(cgColor:))?.alphaComponent ?? 0
         #expect(fill < 0.01, "Play or Pause is filled (alpha \(fill)) while Next is not")
+        #expect(play.contentTintColor != nil, "Play or Pause drew no tint")
         #expect(play.contentTintColor == next.contentTintColor, "Play or Pause is tinted \(String(describing: play.contentTintColor)), Next \(String(describing: next.contentTintColor))")
         #expect(play.frame.size == next.frame.size, "Play or Pause is \(play.frame.size), Next \(next.frame.size)")
         card.configure(NowPlayingLevelsTests.track(playing: false))
         #expect(play.accessibilityLabel() == "Play" && play.icon == .mediaPlay)
     }
 
-    /// Every glyph size a density or Interface Size can make gets a box an even number of points larger.
-    @Test func everyGlyphSizeGetsAWholePointInset() {
-        for glyph in stride(from: CGFloat.iconFloor, through: 30, by: 1) {
-            let side = SidebarNowPlayingCardView.controlSide(glyph: glyph)
-            let inset = (side - glyph) / 2
-            #expect(inset == inset.rounded() && inset >= Metrics.space1, "a \(glyph) pt glyph gets a \(side) pt box, inset \(inset)")
+    /// Every glyph size a density or Interface Size can make gets a box an even number of points larger, at every
+    /// density's spacing (Spacious's `space1` is 2.5 pt).
+    @Test(arguments: DensityPreset.allCases)
+    func everyGlyphSizeGetsAWholePointInset(preset: DensityPreset) {
+        DensityTokens.$scoped.withValue(preset.tokens) {
+            for glyph in stride(from: CGFloat.iconFloor, through: 30, by: 1) {
+                let side = SidebarNowPlayingCardView.controlSide(glyph: glyph)
+                let inset = (side - glyph) / 2
+                #expect(inset == inset.rounded() && inset >= Metrics.space1, "\(preset): a \(glyph) pt glyph gets a \(side) pt box, inset \(inset)")
+            }
         }
     }
 }

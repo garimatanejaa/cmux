@@ -165,8 +165,8 @@ final class SidebarNowPlayingCardView: NSView {
     private static var padding: CGFloat { Metrics.cardPadding }
     /// The header's height at least: the artwork never shrinks below it.
     private static let headerMinimum: CGFloat = 44
-    /// The controls row's height.
-    private static let rowHeight: CGFloat = 32
+    /// The controls row's height: 32 pt, or a control's side where a large glyph needs more.
+    private static var rowHeight: CGFloat { max(32, controlSide(glyph: glyphSide)) }
     /// About how large a control's hit box is; ``controlSide(glyph:)`` makes the exact side.
     private static let controlTarget: CGFloat = 24
 
@@ -177,8 +177,10 @@ final class SidebarNowPlayingCardView: NSView {
     /// An image-only button draws its glyph at a whole-point offset, so a box whose side differs from
     /// the glyph's by an odd number (a 17 pt glyph in 24 pt, the old 13 pt glyph in 32 pt) put the
     /// glyph half a point off center, one way in one control and the other way in the next (#52939).
+    /// Spacing steps are half points at some densities (`space1` is 2.5 at Spacious), so the inset
+    /// rounds up to a whole point too.
     static func controlSide(glyph: CGFloat) -> CGFloat {
-        glyph + 2 * max(Metrics.space1, ((controlTarget - glyph) / 2).rounded(.up))
+        glyph + 2 * max(Metrics.space1, ((controlTarget - glyph) / 2)).rounded(.up)
     }
 
     /// The site, title and artist lines' height for `nowPlaying`.
@@ -235,7 +237,9 @@ final class SidebarNowPlayingCardView: NSView {
         // and Picture in Picture; the level bars close the row. One center line for all of them:
         // each control is the same square on whole points, its glyph inset by whole points, and
         // the bars are as tall as a glyph, so every glyph and the bars share the row's center (#52939).
-        let glyph = Self.glyphSide, control = Self.controlSide(glyph: glyph), gap = Metrics.space2
+        // Whole-point steps: `space2` and `space3` are half points at some densities (3.5 at Compact).
+        let glyph = Self.glyphSide, control = Self.controlSide(glyph: glyph), gap = Metrics.space2.rounded(.up)
+        let wide = Metrics.space3.rounded(.up)
         let row = Self.rowHeight, center = y + row / 2
         let controlY = (center - control / 2).rounded(), inset = (control - glyph) / 2
         var x = max(0, pad - inset).rounded()
@@ -243,10 +247,10 @@ final class SidebarNowPlayingCardView: NSView {
             button.frame = NSRect(x: x, y: controlY, width: control, height: control)
             x += control + gap
         }
-        x += Metrics.space3 - gap
+        x += wide - gap
         let line = Metrics.lineWidth(1)
-        controlsDivider.frame = NSRect(x: x, y: controlY + inset, width: line, height: glyph)
-        x += line + Metrics.space3
+        controlsDivider.frame = NSRect(x: x.rounded(), y: controlY + inset, width: line, height: glyph)
+        x = x.rounded() + line + wide
         pictureInPictureButton.frame = NSRect(x: x.rounded(), y: controlY, width: control, height: control)
         let levelsWidth = SidebarNowPlayingLevels.width, levelsX = (b.width - pad - levelsWidth).rounded()
         // A narrow sidebar drops the bars rather than draw them over the last control.
