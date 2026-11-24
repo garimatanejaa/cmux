@@ -418,6 +418,12 @@ await requireBrowserLane("transcript-block-sideways-scrollbar.test.ts", async ()
             await painted(page);
             const box = await measure(page, block);
             const rest = await thumb(page, box);
+            console.log("DIAG " + block.variant + " " + await page.evaluate(({ scroller, shadow }) => {
+              const body = document.querySelector<HTMLElement>(scroller)!;
+              const el = shadow ? [...body.querySelectorAll("*")].map((e) => e.shadowRoot?.querySelector<HTMLElement>("[data-code]")).find(Boolean)! : body;
+              const cs = getComputedStyle(el);
+              return JSON.stringify({ attrs: [...el.attributes].map((a) => a.name), ink: cs.getPropertyValue("--cmux-sideways-ink"), rest: cs.getPropertyValue("--cmux-sideways-rest"), inline: el.getAttribute("style"), root: [...document.documentElement.attributes].map((a) => a.name) });
+            }, block));
             // A sideways wheel over the lines, clear of the bar.
             await page.mouse.move(box.left + box.width / 2, box.bottom - box.lane - 24);
             await page.mouse.wheel(40, 0);
