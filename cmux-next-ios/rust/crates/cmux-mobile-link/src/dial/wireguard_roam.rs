@@ -145,9 +145,6 @@ pub(super) struct RelayShared {
     sticky: AtomicBool,
     /// The underlay's route is the relay (or it has none).
     on_relay: AtomicBool,
-    /// The underlay has a confirmed route other than the relay: the peer
-    /// said our datagrams reach it there, and its own arrive (both ways).
-    confirmed_elsewhere: AtomicBool,
     /// The held carrier's view of the peer's socket.
     peer_online: Mutex<Option<watch::Receiver<bool>>>,
     state: Mutex<RelayClock>,
@@ -156,17 +153,13 @@ pub(super) struct RelayShared {
 
 #[derive(Debug)]
 struct RelayClock {
-    /// When the relay socket died while the session needed it: join again
-    /// at once, unless something from the peer authenticated since (another
-    /// path works, so the session does not need the relay after all).
-    lost: Option<Instant>,
+    /// The relay socket died while the session needed it: join again now.
+    lost: bool,
     /// When the tunnel started or this side last roamed.
     since: Instant,
     /// When something last authenticated.
     heard: Option<Instant>,
-    /// When this side last let the relay go on its own (another route
-    /// carried the session): a join soon after makes the relay stick. A
-    /// socket that died is not a leave.
+    /// When the relay socket was last let go.
     left: Option<Instant>,
     /// The peer asked (`wg-relay`) and this side has not joined since.
     asked: bool,
@@ -178,10 +171,9 @@ impl Default for RelayShared {
             held: AtomicBool::new(false),
             sticky: AtomicBool::new(false),
             on_relay: AtomicBool::new(true),
-            confirmed_elsewhere: AtomicBool::new(false),
             peer_online: Mutex::new(None),
             state: Mutex::new(RelayClock {
-                lost: None,
+                lost: false,
                 since: Instant::now(),
                 heard: None,
                 left: None,
@@ -194,35 +186,23 @@ impl Default for RelayShared {
 
 impl RelayShared {
     pub(super) fn set_held(&self, held: bool) {
-        self.held.store(held, Ordering::Relaxed);
+        let was = self.held.swap(held, Ordering::Relaxed);
+        let mut clock = lock(&self.state);
+        if was && !held {
+            clock.left = Some(Instant::now());
+        }
         if held {
-            let mut clock = lock(&self.state);
-            clock.lost = None;
+            clock.lost = false;
             // An ask that crossed this side's own join is answered by it.
             clock.asked = false;
         }
     }
 
-    /// This side let the relay go because another route carries the session.
-    /// Only this arms [`Self::sticky`] for a join soon after (a reset or a
-    /// refused grant never does: review of #53163).
-    pub(super) fn left(&self) {
-        self.set_held(false);
-        lock(&self.state).left = Some(Instant::now());
-    }
-
     /// The relay socket died while the session rode it (or had no other
-    /// confirmed route): the watch joins again at once, unless the peer is
-    /// heard on another path first.
+    /// confirmed route): the watch joins again at once.
     pub(super) fn lost(&self) {
         self.set_held(false);
-        lock(&self.state).lost = Some(Instant::now());
-    }
-
-    /// A join the session turned out not to need (the peer answered on
-    /// another path while it ran) settles a lost socket too.
-    fn not_lost(&self) {
-        lock(&self.state).lost = None;
+        lock(&self.state).lost = true;
     }
 
     pub(super) fn held(&self) -> bool {
@@ -235,14 +215,6 @@ impl RelayShared {
 
     pub(super) fn set_on_relay(&self, on_relay: bool) {
         self.on_relay.store(on_relay, Ordering::Relaxed);
-    }
-
-    pub(super) fn set_confirmed_elsewhere(&self, confirmed: bool) {
-        self.confirmed_elsewhere.store(confirmed, Ordering::Relaxed);
-    }
-
-    fn confirmed_elsewhere(&self) -> bool {
-        self.confirmed_elsewhere.load(Ordering::Relaxed)
     }
 
     /// Whether this side needs its peer on the relay and the peer's socket
@@ -297,23 +269,12 @@ impl RelayShared {
             return None;
         }
         let now = Instant::now();
-        let mut clock = lock(&self.state);
+        let clock = lock(&self.state);
         if clock.asked {
-            // Both directions already work elsewhere: the ask is stale (it
-            // crossed this side's own join, or a socket reset).
-            if self.confirmed_elsewhere() {
-                clock.asked = false;
-            } else {
-                return Some("the peer joined the relay");
-            }
+            return Some("the peer joined the relay");
         }
-        if let Some(lost) = clock.lost {
-            // Heard since the socket died: another path carries the session.
-            if clock.heard.is_some_and(|heard| heard > lost) {
-                clock.lost = None;
-            } else {
-                return Some("the relay socket closed");
-            }
+        if clock.lost {
+            return Some("the relay socket closed");
         }
         match clock.heard {
             None if now.duration_since(clock.since) >= RELAY_AFTER => Some("nothing reached the peer"),
@@ -1315,14 +1276,11 @@ async fn run_relay_watch(session: Weak<Session>) {
                 // The peer was heard while the join ran (a slow handshake, not a
                 // blocked one): this side's own relay is not needed. A side that
                 // was asked, or that has no other path, keeps it.
-                // An asked join is dropped the same way once a route elsewhere is
-                // confirmed both ways: the peer no longer needs it.
-                if !plan.now && shared.heard_after(decided) && (!asked || shared.confirmed_elsewhere()) {
+                if !asked && !plan.now && shared.heard_after(decided) {
                     tracing::debug!(
                         session = session.session_id,
                         "the peer answered meanwhile; leaving cmux's relay unused"
                     );
-                    shared.not_lost();
                     continue;
                 }
                 if lock(&shared.state).left.is_some_and(|left| left.elapsed() < RELAY_STICKY_WITHIN) {

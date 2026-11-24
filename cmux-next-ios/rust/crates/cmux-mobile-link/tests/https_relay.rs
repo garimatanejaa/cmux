@@ -486,3 +486,67 @@ async fn a_relay_reset_does_not_keep_the_session_on_the_relay() {
     }
     connected.link.close("done");
 }
+
+// ---- scratch (review only, never pushed): UDP blocked mid-session ----
+static UDP_MID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn udp_mid(_: &std::net::SocketAddr) -> bool {
+    UDP_MID.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+async fn scratch_try_echo(link: &cmux_mobile_link::Link, wait: Duration) -> bool {
+    let attempt = async {
+        let mut channel = link.open("echo", serde_json::json!({})).await.ok()?;
+        channel.send(Bytes::from(vec![7u8; 1000])).await.ok()?;
+        let mut got = 0;
+        while got < 1000 {
+            match channel.recv().await {
+                Some(ChannelEvent::Data(bytes)) => got += bytes.len(),
+                _ => return None,
+            }
+        }
+        Some(())
+    };
+    tokio::time::timeout(wait, attempt).await.ok().flatten().is_some()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn scratch_udp_blocked_mid_session_recovers_on_the_relay() {
+    let idle: u64 = std::env::var("SCRATCH_IDLE").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+    let mac_options = DialOptions { drop_udp_to: Some(udp_mid), ..options() };
+    let rig = rig(FakeOptions::default(), mac_options, true).await;
+    let phone = DialOptions {
+        drop_udp_to: Some(udp_mid),
+        relay: relay(&rig.server, &rig.phone_id),
+        timeout: Duration::from_secs(30),
+        ..options()
+    };
+    let connected =
+        dial::connect(&rig.phone, &rig.mac_id, TransportKind::WireGuard, &phone, LinkConfig::default())
+            .await
+            .expect("dial");
+    echo(&connected.link, 2).await;
+    let session = connected.session_id.clone();
+    let before = *connected.path.borrow();
+    tokio::time::sleep(Duration::from_secs(idle)).await;
+    let joins = rig.server.relay_joins();
+    UDP_MID.store(true, std::sync::atomic::Ordering::Relaxed);
+    let start = std::time::Instant::now();
+    let mut ok = false;
+    while start.elapsed() < Duration::from_secs(70) {
+        if scratch_try_echo(&connected.link, Duration::from_secs(3)).await {
+            ok = true;
+            break;
+        }
+    }
+    eprintln!(
+        "SCRATCH idle={idle}s before={before:?} recovered={ok} after={:?} joins={} phone_held={:?} mac_held={:?} phone_path={:?} mac_path={:?}",
+        start.elapsed(),
+        rig.server.relay_joins() - joins,
+        cmux_mobile_link::dial::wireguard::relay_held(&session, true),
+        cmux_mobile_link::dial::wireguard::relay_held(&session, false),
+        *connected.path.borrow(),
+        rig.mac_path(),
+    );
+    assert!(ok, "never recovered on the relay");
+    connected.link.close("done");
+}
