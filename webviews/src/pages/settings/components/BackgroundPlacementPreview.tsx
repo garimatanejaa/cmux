@@ -56,6 +56,7 @@ export function BackgroundPlacementPreview({ src, value, imageSize = null, disab
       <div
         ref={frame}
         className="placement-frame"
+        // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- a 2D drag surface; a range input has one axis.
         role="slider"
         tabIndex={disabled ? -1 : 0}
         aria-label={t("settingsWindow.backdropPlacement.preview")}
@@ -130,6 +131,7 @@ export function BackgroundPlacementPreview({ src, value, imageSize = null, disab
       <div className="placement-controls">
         <fieldset className="segmented" aria-label={t("settingsWindow.backdropPlacement.mode")} disabled={disabled}>
           {(["fill", "fit"] as const).map((mode) => (
+            // oxlint-disable-next-line jsx-a11y/label-has-associated-control -- the radio input and its words are inside the label.
             <label key={mode} className="segment" data-checked={value.mode === mode ? "" : undefined}>
               <input
                 type="radio"
