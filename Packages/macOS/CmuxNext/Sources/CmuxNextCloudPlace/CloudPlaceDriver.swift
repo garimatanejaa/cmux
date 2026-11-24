@@ -140,17 +140,18 @@ public final class CloudPlaceDriver {
         Task { @MainActor in
             await withTaskGroup(of: Void.self) { group in
                 // Up to `parallel` at once; each that ends starts the next, until Stop or the queue's end. (No nested
-                // function capturing the group: the region-based isolation checker refuses that pattern.)
+                // function capturing the group and no `@MainActor` child closure: the region-based isolation checker refuses
+                // both. `evacuated` is main-actor isolated itself.)
                 var next = queue.makeIterator()
                 for _ in 0..<max(1, plan.parallel) {
                     guard !self.place.evacuationStopped, let chat = next.next() else { break }
                     self.place.evacuationPhase(chat.session, .running)
-                    group.addTask { @MainActor in await self.evacuated(chat, toCloud: toCloud) }
+                    group.addTask { await self.evacuated(chat, toCloud: toCloud) }
                 }
                 while await group.next() != nil {
                     guard !self.place.evacuationStopped, let chat = next.next() else { continue }
                     self.place.evacuationPhase(chat.session, .running)
-                    group.addTask { @MainActor in await self.evacuated(chat, toCloud: toCloud) }
+                    group.addTask { await self.evacuated(chat, toCloud: toCloud) }
                 }
             }
         }
