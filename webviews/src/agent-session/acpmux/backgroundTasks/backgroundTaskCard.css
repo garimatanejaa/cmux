@@ -84,7 +84,8 @@
   cursor: default;
   opacity: 0;
 }
-.acpmux-bg-card:is(:hover, :focus-within) .acpmux-bg-card__terminal,
+.acpmux-bg-card:hover .acpmux-bg-card__terminal,
+.acpmux-bg-card:is(:has([data-popup-open]), :focus-within) .acpmux-bg-card__terminal,
 .acpmux-bg-card__terminal:focus-visible {
   opacity: 1;
 }
