@@ -601,3 +601,31 @@ async fn a_stale_local_ad_does_not_delay_the_service_dial() {
     local_link_remove(instance);
     pool.reset().await;
 }
+
+/// A network change drops the ads: they were seen on the old network, and a dial now would spend
+/// the hub bound on a dead one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_network_change_forgets_the_local_ads() {
+    use cmux_mobile_link_ffi::local_link::{
+        LocalEndpoint, LocalTxt, local_link_nearby, local_link_observe, local_link_remove,
+    };
+
+    let server = FakeSignaling::start(FakeOptions::default()).await;
+    let mac_id = uuid::Uuid::new_v4().to_string();
+    let device = uuid::Uuid::new_v4().to_string();
+    let instance = format!("roam-{mac_id}");
+    assert!(local_link_observe(
+        instance.clone(),
+        vec![
+            LocalTxt { key: "id".into(), value: mac_id.clone() },
+            LocalTxt { key: "v".into(), value: "1".into() }
+        ],
+        vec![LocalEndpoint { host: "127.0.0.1".into(), port: 9 }],
+    ));
+    assert!(local_link_nearby(mac_id.clone()));
+    let pool = WarmPool::new();
+    pool.network_changed(server.base_url.clone(), "user:alice".into(), "team".into(), device).await;
+    assert!(!local_link_nearby(mac_id), "the old network's ad outlived the roam");
+    local_link_remove(instance);
+    pool.reset().await;
+}
