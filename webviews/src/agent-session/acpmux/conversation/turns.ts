@@ -1837,16 +1837,15 @@ export const isAgentPrompt = (row: AcpmuxRow) =>
 const foldsAsWork = (row: AcpmuxRow) => isAgentPrompt(row) || harnessWork(row) !== undefined;
 
 /// A row the harness wrote that is the work of the stretch it arrived in, as a call's end is: a row
-/// of ``harnessWork`` other than a turn's line, a subagent's end and a background command's end. A
-/// failed one is none: it stays in sight, waiting on a Retry.
+/// of ``harnessWork`` (a "Report from" line among them), a subagent's end and a background command's
+/// end. A failed one is none: it stays in sight, waiting on a Retry.
 const harnessEnd = (row: AcpmuxRow) =>
-  (row.kind === "user" && harnessWork(row) !== undefined) ||
-  (row.kind === SUBAGENT_DONE &&
-    row.subagents?.[0]?.state !== undefined &&
-    row.subagents[0].state !== "failed" &&
-    row.subagents[0].state !== "running") ||
+  harnessWork(row) !== undefined ||
+  (row.kind === SUBAGENT_DONE && isEndState(row.subagents?.[0]?.state)) ||
   (row.kind === "backgroundTask" &&
     (row.backgroundTask?.state === "completed" || row.backgroundTask?.state === "stopped"));
+const isEndState = (state: string | undefined) =>
+  state === "completed" || state === "cancelled" || state === "disconnected";
 
 /// `turn` (an ended turn's rows) with each burst the harness wrote after one of its stretches ended
 /// moved into that stretch, before the summary that ended it, so it folds under that stretch's
