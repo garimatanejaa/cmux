@@ -1284,8 +1284,10 @@ function shapedTurn(
   // A turn the agent ran on its own after this one ended (no prompt starts it) draws in its tail:
   // a quiet one, or one still running, as its one line (backgroundTurns.ts).
   // A burst the harness wrote after a stretch ended, that set no turn of its own going, is that
-  // stretch's work (`harnessIntoStretches`).
-  const turn = foldBackgroundTurns(answeringPerson(user, live ? kept : harnessIntoStretches(kept)), expanded);
+  // stretch's work (`harnessIntoStretches`), where a "Worked for" holds the work: a family that draws
+  // its runs in place has no fold to put it in, and it draws where it came.
+  const intoStretches = !live && foldStyle.conclusion;
+  const turn = foldBackgroundTurns(answeringPerson(user, intoStretches ? harnessIntoStretches(kept) : kept), expanded);
   const held = source.filter((row) => row.kind === "user" && !continuesTurn(row));
   const visibleTurn =
     !isVisiblyEmptyMessage(user) || turn.some((row) => row.kind !== "turnSummary" && !isVisiblyEmptyMessage(row));
@@ -1837,16 +1839,15 @@ export const isAgentPrompt = (row: AcpmuxRow) =>
 const foldsAsWork = (row: AcpmuxRow) => isAgentPrompt(row) || harnessWork(row) !== undefined;
 
 /// A row the harness wrote that is the work of the stretch it arrived in, as a call's end is: a row
-/// of ``harnessWork`` other than a turn's line, a subagent's end and a background command's end. A
-/// failed one is none: it stays in sight, waiting on a Retry.
+/// of ``harnessWork`` (a "Report from" line among them), a subagent's end and a background command's
+/// end. A failed one is none: it stays in sight, waiting on a Retry.
 const harnessEnd = (row: AcpmuxRow) =>
-  (row.kind === "user" && harnessWork(row) !== undefined) ||
-  (row.kind === SUBAGENT_DONE &&
-    row.subagents?.[0]?.state !== undefined &&
-    row.subagents[0].state !== "failed" &&
-    row.subagents[0].state !== "running") ||
+  harnessWork(row) !== undefined ||
+  (row.kind === SUBAGENT_DONE && isEndState(row.subagents?.[0]?.state)) ||
   (row.kind === "backgroundTask" &&
     (row.backgroundTask?.state === "completed" || row.backgroundTask?.state === "stopped"));
+const isEndState = (state: string | undefined) =>
+  state === "completed" || state === "cancelled" || state === "disconnected";
 
 /// `turn` (an ended turn's rows) with each burst the harness wrote after one of its stretches ended
 /// moved into that stretch, before the summary that ended it, so it folds under that stretch's
@@ -2529,13 +2530,19 @@ function foldTailTurn(
   const lineAt = stretch.findIndex((row) => row.kind === BACKGROUND_TURN && row.background !== undefined);
   const line = lineAt >= 0 ? stretch[lineAt] : undefined;
   const background = line?.background?.id ?? stretch.find((row) => row.inBackground !== undefined)?.inBackground;
+  // Where a "Worked for" holds the work, rows the harness wrote that set a turn going are its first
+  // calls; a family that draws its runs in place draws them where they came.
+  const folds = turnFoldStyle(agentFamily).conclusion;
   if (background === undefined || !endedBackground.has(background))
-    return harnessStartedTail(stretch, expanded, endedBackground, clockOffset, sessionStatus, agentFamily);
+    return folds
+      ? harnessStartedTail(stretch, expanded, endedBackground, clockOffset, sessionStatus, agentFamily)
+      : endedTail(stretch);
   // What came before its line (a late update of an earlier call) draws as it came; rows the harness
   // wrote that set it going are its first calls (`harnessEnd`).
   const ahead = line ? stretch.slice(0, lineAt) : [];
-  const before = ahead.filter((row) => !harnessEnd(row));
-  const drawn = [...ahead.filter(harnessEnd), ...(line ? stretch.slice(lineAt + 1) : stretch)];
+  const leads = (row: AcpmuxRow) => folds && harnessEnd(row);
+  const before = ahead.filter((row) => !leads(row));
+  const drawn = [...ahead.filter(leads), ...(line ? stretch.slice(lineAt + 1) : stretch)];
   if (drawn.length === 0) return endedTail(stretch);
   // One that ended on no row of its own still folds, under a summary that draws nothing.
   const provisional: AcpmuxRow | undefined =
