@@ -3,6 +3,7 @@
 // function AcpmuxPane calls inline for its `composer`, so React sees the same element tree (no
 // component boundary of its own); every hook stays in AcpmuxPane, and this holds no state.
 import type React from "react";
+import { useCallback } from "react";
 import type { HarnessCatalog } from "../catalog";
 import type { useTrustHeldPrompts } from "../trustHeld";
 import type { useCloudChatRecovery } from "../useCloudChatRecovery";
