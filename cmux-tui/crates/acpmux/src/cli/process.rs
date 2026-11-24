@@ -887,7 +887,6 @@ async fn start_task(
         Some(socket) => Client::connect(std::path::Path::new(&socket)).await.map_err(unsent)?,
         None => crate::daemon::connect(false).await.map_err(unsent)?,
     };
-    let client = std::sync::Arc::new(client);
     let view = client
         .request(method::MUX_BG_START, params.clone())
         .await
