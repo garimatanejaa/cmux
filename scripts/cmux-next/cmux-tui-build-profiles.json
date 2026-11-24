@@ -8,7 +8,8 @@
   "shipped": {
     "target_set_main": "macos",
     "target_set": "macos-arm64",
-    "linux_target_set": "linux",
+    "linux_x86_64_target_set": "linux-x86_64",
+    "linux_aarch64_target_set": "linux-aarch64",
     "lto": "fat",
     "build_cmux_rd": true
   },

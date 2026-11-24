@@ -253,6 +253,11 @@ jobs:
               # cmux-tui-artifacts.yml builds Linux in its own call so the Cloud
               # machine channel moves without waiting for the macOS legs.
               selected = [target for target in targets if target["target"].endswith("-unknown-linux-musl")]
+          elif target_set in ("linux-x86_64", "linux-aarch64"):
+              # cmux-tui-artifacts.yml builds each Linux target in its own call so the
+              # Cloud machine channel points from x86_64 without waiting for aarch64.
+              arch = target_set.removeprefix("linux-")
+              selected = [target for target in targets if target["target"] == f"{arch}-unknown-linux-musl"]
           elif target_set == "macos":
               selected = [target for target in targets if target["target"].endswith("-apple-darwin")]
           elif target_set == "macos-arm64":
