@@ -303,6 +303,31 @@ import CmuxNextWakeupsTestSupport
         #expect(after == before.size, "the card changed size for its picture: \(before.size) then \(after)")
     }
 
+    /// Lawrence 2026-11-23 (a recording of a tab's card: "we animate width/height which is bad, should just
+    /// fade in"): the card grew out of its tab, from a box as wide as the tab to its whole size, on the settle
+    /// spring (`HoverCardEntrance.morph`, the default since f10f5276, #37719). A tab's card opens at its final
+    /// size and only fades in: no growth and no slide, with the settings a person has. A move to the next tab
+    /// changes no size on a spring either.
+    @Test func aTabCardOpensAtItsFinalSizeAndOnlyFadesIn() async throws {
+        Motion.reduceMotionOverride = false
+        defer { Motion.reduceMotionOverride = nil }
+        let s = Self.strip()
+        defer { s.tearDown() }
+        let before = HoverCardPanel.morphGeneration
+        try await Self.open("a", s)
+        let panel = try #require(s.coordinator.panel)
+        #expect(HoverCardPanel.morphGeneration == before, "the card grew out of its tab instead of fading in at its size")
+        #expect(panel.activeMorph == nil, "the card is still growing")
+        #expect(panel.contentView?.layer?.animation(forKey: "sublayerTransform") == nil, "the card slid in")
+        #expect(abs(panel.presentedCardFrame.width - panel.cardFrame.width) < 0.5
+                && abs(panel.presentedCardFrame.height - panel.cardFrame.height) < 0.5,
+                "the card is drawn at \(panel.presentedCardFrame.size), not its size \(panel.cardFrame.size)")
+        s.move(to: try s.center("b"))
+        try await Self.settle(until: { s.shows("b") })
+        try #require(s.shows("b"), "the next tab showed no card")
+        #expect(HoverCardPanel.morphGeneration == before, "the move to the next tab changed the card's size on a spring")
+    }
+
     /// A picture that lands when the test says so.
     private final class HeldPreviews: TabPreviewProvider {
         private var held: CheckedContinuation<Void, Never>?
