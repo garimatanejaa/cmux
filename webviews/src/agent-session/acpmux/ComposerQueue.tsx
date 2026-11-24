@@ -63,6 +63,7 @@ import { claimedReply } from "./conversation/waitingAskStore";
 import { type QueuedEntry, shownText, heldReason } from "./composerQueueModel";
 import { acpmuxPerf } from "./perf";
 import { rovingTabStopProps } from "../../ui/listRowKeyboard";
+import { revealControls } from "../../ui/revealCover";
 import { focusRoute } from "../../ui/focusRoute";
 /** A queue of more queued prompts than this folds; folded, it shows `FOLD_SHOWS` of them. */
 const FOLD_AT = 3;
@@ -183,7 +184,10 @@ function rowOf(list: HTMLElement | null | undefined, id: string): HTMLElement | 
 function titleWhenTruncated(event: React.PointerEvent<HTMLElement>, prompt: string) {
   const button = event.currentTarget;
   const text = button.firstElementChild ?? button;
-  if (text.scrollWidth > text.clientWidth || text.scrollHeight > text.clientHeight + 1) button.title = prompt;
+  // The actions that show on hover lie over the text's end (`.ui-reveal-text`): text under them is cut too.
+  const covered = parseFloat(getComputedStyle(text).getPropertyValue("--ui-reveal-controls-w")) || 0;
+  if (text.scrollWidth > text.clientWidth - covered || text.scrollHeight > text.clientHeight + 1)
+    button.title = prompt;
   else button.removeAttribute("title");
 }
 
@@ -942,7 +946,7 @@ export const ComposerQueue = React.memo(function ComposerQueue({
     if (theirs(entry)) return null;
     const side = sideChat?.(entry);
     return (
-      <span className="acpmux-queued-actions">
+      <span className="acpmux-queued-actions" ref={revealControls}>
         {canSendNow(entry) && (
           <button
             type="button"
@@ -1049,7 +1053,7 @@ export const ComposerQueue = React.memo(function ComposerQueue({
           }}
         >
           {/* WebKit does not clamp a button's own lines: the clamp is on its text. */}
-          <span className="acpmux-queued-clamp">
+          <span className="acpmux-queued-clamp ui-reveal-text">
             {entry.author && <AuthorChip author={entry.author} inline />}
             {entry.next && (
               <span className="acpmux-queued-kind" data-kind="steer">
@@ -1183,6 +1187,7 @@ export const ComposerQueue = React.memo(function ComposerQueue({
           // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- A row takes focus from ↑ on the prompt and has its keys (edit, move, send now, remove); its buttons do the same by pointer.
           <li
             className="acpmux-queued"
+            data-reveal-host=""
             key={entry.id}
             data-prompt-id={entry.id}
             aria-keyshortcuts={theirs(entry) ? undefined : "Enter Alt+ArrowUp Alt+ArrowDown Delete"}

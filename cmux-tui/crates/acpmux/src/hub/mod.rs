@@ -77,6 +77,7 @@ mod complete;
 pub mod composers;
 mod cursor_ext;
 mod digest;
+pub(crate) mod queue_origin;
 pub(crate) mod dispatch;
 pub(crate) mod file_uploads;
 mod gemini_plan;
