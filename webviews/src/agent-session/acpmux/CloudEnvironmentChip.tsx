@@ -3,7 +3,6 @@ import { useLocationShortcut } from "./composerControls";
 import type { CloudEnvironment } from "../../pages/cloud/environmentModel";
 import { Menu, MenuButton, MenuItem, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuSeparator } from "../../ui/Menu";
 import { ChevronIcon } from "./ComposerPickers";
-import { ServerIcon } from "./EnvironmentPicker";
 import { translate as t } from "./i18n";
 import { useLocationOpener, useLocationPopover } from "./locationPopover";
 import { postNative } from "./native";
@@ -127,17 +126,6 @@ function folderName(folder: string | undefined): string | undefined {
   return name || undefined;
 }
 
-/// The Edit row's label. A picked environment's is "Edit <name>…". Auto is no environment: its Edit
-/// opens the Default it runs in, so it reads "Edit Default environment…", or "Edit <name> (Default)…"
-/// once the Default is known by another name; never "Edit Auto…".
-export function editLabel(row: { id?: string; name: string }, defaultName: string | undefined): string {
-  if (row.id) return t("composer.envEdit", { name: row.name });
-  const named = defaultName?.trim();
-  return named && named.toLowerCase() !== "default"
-    ? t("composer.envEditNamedDefault", { name: named })
-    : t("composer.envEditDefault");
-}
-
 /// Stable hooks for GUI automation (the start matrix's flag-on row): the chip is
 /// `cloud-environment-chip` (its button: `data-menu="Environment"`), Auto `cloud-environment-auto`,
 /// each environment `cloud-environment-option` with `data-environment-name`, and the actions below.
@@ -183,7 +171,6 @@ export function CloudEnvironmentChip({
   const label = t("composer.environment");
   const name = t("composer.envCloudLabel");
   const rows = cloudEnvironmentRows(control, auto);
-  const autoHint = t("composer.envAutoHint");
   const environments = rows.filter((row) => row.kind === "auto" || row.kind === "environment");
   const actions = rows.filter((row) => row.kind !== "auto" && row.kind !== "environment");
   const pick = (id: string) => {
@@ -195,34 +182,27 @@ export function CloudEnvironmentChip({
     else if (row.kind === "newMachine")
       control.onNewMachine(control.current === AUTO_ENVIRONMENT ? undefined : control.current);
   };
+  // One line per row, as the model picker's: a short label in the icon column's grid, no second
+  // line, tooltip or hidden hint (the agent pane has no sr-only style, so a hint drew as text).
   const actionRow = (row: CloudEnvironmentRow, index: number) => {
     if (row.kind === "separator") return <MenuSeparator key={`separator-${index}`} />;
     const text =
       row.kind === "new"
         ? t("composer.envNew")
         : row.kind === "edit"
-          ? editLabel(row, control.auto?.name)
-          : t("composer.envNewMachine");
-    const hint =
-      row.kind === "new"
-        ? t("composer.envNewHint")
-        : row.kind === "edit"
-          ? t("composer.envEditHint")
-          : t("composer.envNewMachineHint");
+          ? t("composer.envEditCurrent")
+          : t("composer.envOpenTerminal");
     return (
       <MenuItem key={row.kind} className="acpmux-menu-item" data-value={row.kind} onSelect={() => action(row)}>
         <span
           className="acpmux-location-row acpmux-cloud-env-row"
           data-action={row.kind}
           data-testid={ACTION_TEST_IDS[row.kind]}
-          /* tooltip-allow: the row names the action in one line; the tooltip says what it does, shown nowhere else */
-          title={hint}
         >
-          {row.kind === "new" ? <PlusIcon /> : row.kind === "edit" ? <GearIcon /> : <ServerIcon />}
+          {row.kind === "new" ? <PlusIcon /> : row.kind === "edit" ? <GearIcon /> : <TerminalIcon />}
           <span className="acpmux-menu-text acpmux-location-name">
             <span className="acpmux-menu-label">{text}</span>
           </span>
-          <span className="ui-sr-only acpmux-cloud-env-hint">{hint}</span>
         </span>
       </MenuItem>
     );
@@ -238,14 +218,11 @@ export function CloudEnvironmentChip({
           data-environment={id}
           data-environment-name={rowName}
           data-testid={row.kind === "auto" ? "cloud-environment-auto" : "cloud-environment-option"}
-          /* tooltip-allow: Auto's one line names it; the tooltip says what it does, shown nowhere else */
-          title={row.kind === "auto" ? autoHint : undefined}
         >
-          {row.kind === "auto" ? <SparkIcon /> : <BoxIcon />}
+          <BoxIcon />
           <span className="acpmux-menu-text acpmux-location-name">
             <span className="acpmux-menu-label">{rowName}</span>
           </span>
-          {row.kind === "auto" && <span className="ui-sr-only acpmux-cloud-env-hint">{autoHint}</span>}
           {dropUp === "gear" && row.kind === "environment" && (
             <button
               type="button"
@@ -351,11 +328,12 @@ function BoxIcon() {
   );
 }
 
-/// Auto: a spark (made for the chat, with no questions).
-function SparkIcon() {
+/// Open Cloud terminal: a prompt.
+function TerminalIcon() {
   return (
     <Icon>
-      <path d="M8 2v3M8 11v3M2 8h3M11 8h3M3.75 3.75l2 2M10.25 10.25l2 2M12.25 3.75l-2 2M5.75 10.25l-2 2" />
+      <path d="M2.75 3.25h10.5v9.5H2.75Z" />
+      <path d="m5 6.5 1.75 1.5L5 9.5M8.25 9.75h2.75" />
     </Icon>
   );
 }
