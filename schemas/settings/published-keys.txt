@@ -76,6 +76,8 @@ agents.chats.enabled
 agents.chats.roots
 agents.chats.sessionRecap
 agents.cmuxMcp
+agents.coldWake.compact
+agents.coldWake.enabled
 agents.defaultPermissionMode
 agents.guidance.claude
 agents.guidance.codex

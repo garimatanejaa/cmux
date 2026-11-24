@@ -1,5 +1,5 @@
 {
-  "$comment": "HAND-EDITED source of the Compact Before the Cache Expires settings: the acpmux daemon's timer that compacts an idle Claude chat while its prompt cache is still warm (cmux-tui/crates/acpmux/src/hub/cache_compact.rs). The daemon reads these keys from the settings file each time it arms the timer and checks this file's defaults and ranges in its tests; gen-settings-sources.py writes the Swift descriptors and parser constants. Row fields: see schemas/settings/source/updates.json.",
+  "$comment": "HAND-EDITED source of the Prompt Cache settings: the acpmux daemon's timer that compacts an idle Claude chat while its prompt cache is still warm (cmux-tui/crates/acpmux/src/hub/cache_compact.rs), and how it batches and compacts wakes to a chat whose cache has lapsed (cold_wake.rs). The daemon reads these keys from the settings file each time it arms the timer and checks this file's defaults and ranges in its tests; gen-settings-sources.py writes the Swift descriptors and parser constants. Row fields: see schemas/settings/source/updates.json.",
   "lists": [
     {
       "name": "agentCache",
@@ -8,7 +8,7 @@
         "key": "settings.group.agentCache",
         "text": "Prompt Cache"
       },
-      "note": "Settings > General > Prompt Cache (Leo, 2026-11-03: \"idk if we maybe also wanna be showing that/opt-in autocompact around that 5min mark\"; \"we ought to make these all accessibly toggle-able ofc\"). Off by default: a compaction is a model call that counts toward usage.",
+      "note": "Settings > General > Prompt Cache (Leo, 2026-11-03: \"idk if we maybe also wanna be showing that/opt-in autocompact around that 5min mark\"; \"we ought to make these all accessibly toggle-able ofc\"). agents.cacheCompact.* is off by default: a compaction is a model call that counts toward usage. agents.coldWake.* is on by default (Leo, 2026-11-24: \"this can be toggled but... this as a default seems decent\"): a cold wake rereads the whole uncached context, so batching and compacting first spend less.",
       "rows": [
         {
           "key": "agents.cacheCompact.enabled",
@@ -59,6 +59,53 @@
             "compact",
             "threshold",
             "context"
+          ]
+        },
+        {
+          "key": "agents.coldWake.enabled",
+          "name": "coldWakeEnabled",
+          "note": "On (the default; Leo, 2026-11-24: \"this can be toggled but... this as a default seems decent\"): once an idle chat's prompt cache has lapsed, acpmux holds its wakes (inbox notices, background-task notices, other agents' messages) and delivers them as one turn after a window of 60 s to 5 min that grows with the chat's context and how long it has been cold (cmux-tui/crates/acpmux/src/hub/cold_wake.rs). A block, a question and the person's own prompt never wait. Off: every wake goes in at once.",
+          "title": {
+            "key": "settings.agents.coldWake.enabled",
+            "text": "Batch Wakes After the Cache Expires"
+          },
+          "help": {
+            "key": "settings.agents.coldWake.enabled.help",
+            "text": "Gathers messages to an idle chat whose cache has expired into one turn, a minute to five later."
+          },
+          "kind": "toggle",
+          "default": true,
+          "keywords": [
+            "cache",
+            "prompt cache",
+            "batch",
+            "wake",
+            "cold",
+            "inbox",
+            "interval"
+          ]
+        },
+        {
+          "key": "agents.coldWake.compact",
+          "name": "coldWakeCompact",
+          "note": "On (the default): before a cold batch goes in, acpmux runs /compact on a Claude Code chat with at least 100K tokens of context, so the batch and every later turn read the summary instead of the whole cold context. Needs agents.coldWake.enabled on.",
+          "title": {
+            "key": "settings.agents.coldWake.compact",
+            "text": "Compact Before Delivering to a Cold Chat"
+          },
+          "help": {
+            "key": "settings.agents.coldWake.compact.help",
+            "text": "Compacts a large Claude chat before its batched messages go in. Needs batching on."
+          },
+          "kind": "toggle",
+          "default": true,
+          "keywords": [
+            "cache",
+            "compact",
+            "autocompact",
+            "cold",
+            "batch",
+            "claude"
           ]
         }
       ]

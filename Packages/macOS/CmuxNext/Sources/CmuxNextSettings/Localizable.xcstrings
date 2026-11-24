@@ -218342,6 +218342,534 @@
         }
       }
     },
+    "settings.agents.coldWake.enabled": {
+      "comment": "Settings > General > Prompt Cache: toggle that holds wakes to an idle chat whose prompt cache has expired and delivers them as one turn",
+      "extractionState": "manual",
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تجميع التنبيهات بعد انتهاء صلاحية ذاكرة التخزين المؤقت"
+          }
+        },
+        "bs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grupiši buđenja nakon isteka keša"
+          }
+        },
+        "da": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saml vækninger, når cachen er udløbet"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weckrufe nach Ablauf des Caches bündeln"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Batch Wakes After the Cache Expires"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agrupar activaciones tras caducar la caché"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Regrouper les réveils après l’expiration du cache"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Raggruppa i risvegli dopo la scadenza della cache"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キャッシュ期限切れ後はウェイクをまとめる"
+          }
+        },
+        "km": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ប្រមូលការដាស់ជាក្រុម បន្ទាប់ពីឃ្លាំងសម្ងាត់ផុតកំណត់"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "캐시 만료 후 깨우기 묶기"
+          }
+        },
+        "nb": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Samle vekkinger etter at hurtigbufferen er utløpt"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grupuj wybudzenia po wygaśnięciu pamięci podręcznej"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agrupar ativações após o cache expirar"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Объединять пробуждения после истечения кэша"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "รวมการปลุกหลังแคชหมดอายุ"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önbellek süresi dolunca uyandırmaları topla"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Об’єднувати пробудження після спливу кешу"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gộp các lần đánh thức khi bộ nhớ đệm đã hết hạn"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "缓存过期后合并唤醒"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "快取過期後合併喚醒"
+          }
+        }
+      }
+    },
+    "settings.agents.coldWake.enabled.help": {
+      "comment": "Settings > General > Prompt Cache: help under the batch-wakes toggle; says the batch arrives one to five minutes later",
+      "extractionState": "manual",
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يجمع الرسائل الموجّهة إلى محادثة خاملة انتهت صلاحية ذاكرتها المؤقتة في دور واحد، بعد دقيقة إلى خمس دقائق."
+          }
+        },
+        "bs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skuplja poruke neaktivnom chatu čiji je keš istekao u jedan potez, minutu do pet kasnije."
+          }
+        },
+        "da": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Samler beskeder til en inaktiv chat, hvis cache er udløbet, i én tur et til fem minutter senere."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fasst Nachrichten an einen ruhenden Chat mit abgelaufenem Cache zu einem Zug zusammen, eine bis fünf Minuten später."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gathers messages to an idle chat whose cache has expired into one turn, a minute to five later."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reúne en un solo turno los mensajes a un chat inactivo cuya caché caducó, de uno a cinco minutos después."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Regroupe en un seul tour les messages destinés à un chat inactif dont le cache a expiré, une à cinq minutes plus tard."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Raccoglie in un unico turno i messaggi per una chat inattiva con la cache scaduta, da uno a cinque minuti dopo."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キャッシュが切れたアイドル状態のチャットへのメッセージを、1〜5 分後に 1 つのターンにまとめます。"
+          }
+        },
+        "km": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ប្រមូលសារទៅកាន់ការជជែកទំនេរ ដែលឃ្លាំងសម្ងាត់ផុតកំណត់ ជាវេនតែមួយ ក្រោយមួយទៅប្រាំនាទី។"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "캐시가 만료된 유휴 채팅으로 가는 메시지를 1~5분 뒤 한 번의 턴으로 모읍니다."
+          }
+        },
+        "nb": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Samler meldinger til en inaktiv chat med utløpt hurtigbuffer i én tur, ett til fem minutter senere."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zbiera wiadomości do bezczynnego czatu z wygasłą pamięcią podręczną w jedną turę, od minuty do pięciu później."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reúne em um só turno as mensagens para um chat ocioso cujo cache expirou, de um a cinco minutos depois."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Собирает сообщения в простаивающий чат с истекшим кэшем в один ход, через одну–пять минут."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "รวมข้อความถึงแชตที่ว่างซึ่งแคชหมดอายุแล้วไว้ในเทิร์นเดียว หลังจากหนึ่งถึงห้านาที"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önbelleğinin süresi dolmuş boştaki bir sohbete gelen mesajları bir ila beş dakika sonra tek turda toplar."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Збирає повідомлення до неактивного чату зі сплилим кешем в один хід, через одну–п’ять хвилин."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gom các tin nhắn gửi tới cuộc trò chuyện đang rảnh đã hết bộ nhớ đệm thành một lượt, sau một đến năm phút."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "把发给缓存已过期的空闲聊天的消息合并为一轮，在一到五分钟后送达。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "把發給快取已過期之閒置聊天的訊息合併為一輪，在一到五分鐘後送達。"
+          }
+        }
+      }
+    },
+    "settings.agents.coldWake.compact": {
+      "comment": "Settings > General > Prompt Cache: toggle that compacts a large Claude chat before its batched messages are delivered",
+      "extractionState": "manual",
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "الضغط قبل التسليم إلى محادثة باردة"
+          }
+        },
+        "bs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sažmi prije isporuke hladnom chatu"
+          }
+        },
+        "da": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Komprimér før levering til en kold chat"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vor der Zustellung an einen kalten Chat komprimieren"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compact Before Delivering to a Cold Chat"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compactar antes de entregar a un chat inactivo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compacter avant de livrer à un chat froid"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compatta prima di consegnare a una chat fredda"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コールドなチャットへの配信前に圧縮"
+          }
+        },
+        "km": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "បង្រួមមុនបញ្ជូនទៅការជជែកដែលត្រជាក់"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "식은 채팅에 전달하기 전에 압축"
+          }
+        },
+        "nb": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Komprimer før levering til en kald chat"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kompaktuj przed dostarczeniem do zimnego czatu"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compactar antes de entregar a um chat frio"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сжимать перед доставкой в остывший чат"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "บีบอัดก่อนส่งถึงแชตที่เย็นแล้ว"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Soğumuş sohbete iletmeden önce sıkıştır"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стискати перед доставкою в охололий чат"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nén trước khi gửi tới cuộc trò chuyện đã nguội"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送达冷聊天前先压缩"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送達冷聊天前先壓縮"
+          }
+        }
+      }
+    },
+    "settings.agents.coldWake.compact.help": {
+      "comment": "Settings > General > Prompt Cache: help under the compact-before-delivery toggle; it needs the batch-wakes toggle on",
+      "extractionState": "manual",
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يضغط محادثة Claude كبيرة قبل إدخال رسائلها المجمّعة. يتطلب تشغيل التجميع."
+          }
+        },
+        "bs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sažima veliki Claude chat prije nego uđu njegove grupisane poruke. Treba uključeno grupisanje."
+          }
+        },
+        "da": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Komprimerer en stor Claude-chat, før dens samlede beskeder sendes ind. Kræver, at samling er slået til."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Komprimiert einen großen Claude-Chat, bevor seine gebündelten Nachrichten eingehen. Bündeln muss an sein."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compacts a large Claude chat before its batched messages go in. Needs batching on."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compacta un chat de Claude grande antes de que entren sus mensajes agrupados. Requiere la agrupación activada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compacte un grand chat Claude avant l’arrivée de ses messages regroupés. Nécessite le regroupement activé."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compatta una chat di Claude grande prima che arrivino i suoi messaggi raggruppati. Richiede il raggruppamento attivo."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "まとめたメッセージを届ける前に、大きな Claude チャットを圧縮します。まとめる設定をオンにする必要があります。"
+          }
+        },
+        "km": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "បង្រួមការជជែក Claude ធំ មុនសារជាក្រុមរបស់វាចូល។ ត្រូវបើកការប្រមូលជាក្រុម។"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "묶인 메시지가 들어가기 전에 큰 Claude 채팅을 압축합니다. 묶기를 켜야 합니다."
+          }
+        },
+        "nb": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Komprimerer en stor Claude-chat før de samlede meldingene går inn. Krever at samling er på."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kompaktuje duży czat Claude, zanim trafią do niego zgrupowane wiadomości. Wymaga włączonego grupowania."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compacta um chat grande do Claude antes de as mensagens agrupadas entrarem. Requer o agrupamento ativado."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сжимает большой чат Claude перед тем, как в него попадут собранные сообщения. Нужно включить объединение."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "บีบอัดแชต Claude ขนาดใหญ่ก่อนข้อความที่รวมไว้จะเข้าไป ต้องเปิดการรวมไว้"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toplanan mesajları girmeden önce büyük bir Claude sohbetini sıkıştırır. Toplamanın açık olması gerekir."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стискає великий чат Claude, перш ніж до нього потраплять зібрані повідомлення. Потрібне увімкнене об’єднання."
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nén cuộc trò chuyện Claude lớn trước khi các tin nhắn đã gộp được gửi vào. Cần bật gộp."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在合并的消息送达前压缩大型 Claude 聊天。需要开启合并。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在合併的訊息送達前壓縮大型 Claude 聊天。需要開啟合併。"
+          }
+        }
+      }
+    },
     "settings.agentPane.dictationSource": {
       "comment": "Settings > Agent Chat > Composer: the row choosing what the dictation button dictates with",
       "extractionState": "manual",

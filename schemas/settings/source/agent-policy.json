@@ -1700,6 +1700,14 @@
     },
     {
       "agent": "userOnly",
+      "why": "Batching a cold chat's wakes and compacting it first trade the person's usage against how soon agents hear back: their call.",
+      "keys": [
+        "agents.coldWake.enabled",
+        "agents.coldWake.compact"
+      ]
+    },
+    {
+      "agent": "userOnly",
       "why": "Which folders an agent may open without asking is the person's call: an agent must not widen what it may open without asking.",
       "keys": [
         "agents.trust.autoTrust",
