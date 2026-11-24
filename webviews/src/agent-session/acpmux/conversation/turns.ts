@@ -1557,6 +1557,7 @@ function foldsTurn(
 ): boolean {
   if (summary.status !== "completed") return true;
   const { durationMs } = turnClock(user, body, turnStartedAtMs, summary);
+  console.log('DBG', user.id, summary.id, summary.at, user.at, durationMs, workRowCount(user, body), body.map((r) => r.id).join(','));
   return worthFolding(workRowCount(user, body), durationMs);
 }
 
