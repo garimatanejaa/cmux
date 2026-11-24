@@ -1,6 +1,7 @@
 import Foundation
 
-public enum RovoDevHookConfig {
+public struct RovoDevHookConfig {
+    public init() {}
     public struct Event: Equatable {
         public var name: String
         public var command: String

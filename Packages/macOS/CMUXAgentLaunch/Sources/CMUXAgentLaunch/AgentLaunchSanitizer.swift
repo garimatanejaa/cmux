@@ -1,6 +1,7 @@
 import Foundation
 
-public enum AgentLaunchSanitizer {
+public struct AgentLaunchSanitizer {
+    public init() {}
     /// Options whose value names a working directory, in split (`--cwd dir`) or `=` form.
     /// The app's binding-command canonicalization reads this same set, so a cwd flag added
     /// here is recognized in both places.

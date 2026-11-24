@@ -8,7 +8,8 @@ public import Foundation
 /// script. Wall-clock pacing is deliberate: this is demo choreography, not
 /// synchronization.
 @MainActor
-public enum ToastDemo {
+public struct ToastDemo {
+    public init() {}
     private static var currentTask: Task<Void, Never>?
 
     /// Starts the demo after `delay`, cancelling any run already in flight.

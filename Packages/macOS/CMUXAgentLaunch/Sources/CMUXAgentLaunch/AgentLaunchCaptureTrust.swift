@@ -9,7 +9,8 @@ import Foundation
 /// codex, …) inherits the ANCESTOR's launch capture. A hook that stores that
 /// capture verbatim poisons resume/fork for the session — the rendered command
 /// runs the wrong binary with the wrong flags.
-public enum AgentLaunchCaptureTrust {
+public struct AgentLaunchCaptureTrust {
+    public init() {}
     /// Wrapper launchers that legitimately differ from the hook kind they launch.
     private static let wrapperLaunchersByKind: [String: Set<String>] = [
         "claude": ["claudeteams"],

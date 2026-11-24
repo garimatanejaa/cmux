@@ -28,7 +28,8 @@ public import Foundation
 ///     backupTimestamp: timestamp
 /// )
 /// ```
-public enum PlaintextSecretMigration {
+public struct PlaintextSecretMigration {
+    public init() {}
     /// The result of a migration attempt, surfaced for logging and tests.
     public enum Outcome: Equatable, Sendable {
         /// `cmux.json` does not exist or could not be read; nothing to do.

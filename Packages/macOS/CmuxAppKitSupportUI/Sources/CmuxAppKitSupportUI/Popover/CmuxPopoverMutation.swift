@@ -38,7 +38,8 @@ public final class CmuxPopoverVisibleUpdateScheduler {
 }
 
 @MainActor
-public enum CmuxPopoverMutation {
+public struct CmuxPopoverMutation {
+    public init() {}
     public static func performWithoutImplicitAnimation(_ body: () -> Void) {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0

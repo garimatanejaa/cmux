@@ -11,7 +11,8 @@ import Foundation
 /// values the Targets pane and Build Settings Levels view need for
 /// `PRODUCT_BUNDLE_IDENTIFIER`, `*_DEPLOYMENT_TARGET`,
 /// `SUPPORTED_PLATFORMS`, and friends.
-public enum XcconfigParser {
+public struct XcconfigParser {
+    public init() {}
     /// Parse the file at ``url`` and merge it, plus every transitive
     /// include, into a single `[key: value]` dictionary.
     ///

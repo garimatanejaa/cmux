@@ -27,7 +27,8 @@ public import Foundation
 /// let home = FileManager.default.homeDirectoryForCurrentUser
 /// let socket = CmuxStateDirectory.url(homeDirectory: home).appendingPathComponent("cmux.sock")
 /// ```
-public enum CmuxStateDirectory {
+public struct CmuxStateDirectory {
+    public init() {}
     /// The directory name segment under `~/.local/state` (and the legacy name
     /// under `~/Library/Application Support`).
     public static let directoryName = "cmux"

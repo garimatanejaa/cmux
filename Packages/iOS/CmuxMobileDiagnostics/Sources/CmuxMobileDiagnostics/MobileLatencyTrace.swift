@@ -2,7 +2,8 @@ import Dispatch
 import Foundation
 
 /// Low-overhead, opt-in latency stamps for DEBUG mobile builds.
-public enum MobileLatencyTrace {
+public struct MobileLatencyTrace {
+    public init() {}
     #if DEBUG
     private static let writer = MobileLatencyTraceWriter(capacity: 4_096)
     #endif

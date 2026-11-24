@@ -32,7 +32,8 @@ public struct RovoDevIndexResult: Equatable, Sendable {
     }
 }
 
-public enum RovoDevMetadataFields {
+public struct RovoDevMetadataFields {
+    public init() {}
     public static let titleKeys: [String] = [
         "title",
         "name",
@@ -88,7 +89,8 @@ private struct RovoDevSessionCandidate: Sendable {
     let mtime: Date
 }
 
-public enum RovoDevIndex {
+public struct RovoDevIndex {
+    public init() {}
     public static func defaultSessionsRoot() -> String {
         ("~/.rovodev/sessions" as NSString).expandingTildeInPath
     }

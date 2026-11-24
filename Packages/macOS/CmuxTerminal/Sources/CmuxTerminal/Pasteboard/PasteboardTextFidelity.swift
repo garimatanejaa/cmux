@@ -1,6 +1,7 @@
 import Foundation
 
-public enum PasteboardTextFidelity {
+public struct PasteboardTextFidelity {
+    public init() {}
     public static func shouldPreferPlainText(
         _ plainText: String,
         overRichText richText: String

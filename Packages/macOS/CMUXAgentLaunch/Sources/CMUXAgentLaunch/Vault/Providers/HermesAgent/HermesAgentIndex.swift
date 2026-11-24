@@ -73,7 +73,8 @@ struct HermesAgentDatabaseSnapshot {
     }
 }
 
-public enum HermesAgentIndex {
+public struct HermesAgentIndex {
+    public init() {}
     private static let contentJSONPrefix = "\u{0}json:"
     // Keep this list aligned with source kinds resumeCommand knows how to relaunch.
     static let knownSources = ["cli", "tui"]

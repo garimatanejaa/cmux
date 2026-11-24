@@ -3,7 +3,8 @@ import Foundation
 
 /// Process-scoped configuration and claim gate for the DEBUG typing probe.
 @MainActor
-enum MobileLatencyProbe {
+struct MobileLatencyProbe {
+    package init() {}
     struct Configuration {
         let count: Int
         let intervalMilliseconds: Int

@@ -6,7 +6,8 @@ import SwiftUI
 /// 0.86 and de-blurring, on a spring loose enough for one soft overshoot.
 /// Departure: a faster, fully damped settle back toward the edge. Reduce
 /// Motion collapses both to plain cross-fades.
-enum ToastMotion {
+struct ToastMotion {
+    package init() {}
     /// The ambient animation that drives presence changes on the overlay.
     static func driver(reduceMotion: Bool) -> Animation {
         reduceMotion

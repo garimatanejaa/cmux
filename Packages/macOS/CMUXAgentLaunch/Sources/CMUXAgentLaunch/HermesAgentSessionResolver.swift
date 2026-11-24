@@ -1,6 +1,7 @@
 import Foundation
 
-public enum HermesAgentSessionResolver {
+public struct HermesAgentSessionResolver {
+    public init() {}
     public static func hermesHome(env: [String: String]) -> String {
         if let home = normalized(env["HERMES_HOME"]) {
             return expandedPath(home, env: env)

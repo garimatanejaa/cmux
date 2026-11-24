@@ -8,6 +8,7 @@ public import Foundation
 /// filesystem probes passed as closures), so the whole type is testable without a running
 /// app or real filesystem. User-facing display strings live with the app target.
 public struct SocketControlSettings {
+    public init() {}
     /// `UserDefaults` key persisting the user's chosen ``SocketControlMode``.
     public static let appStorageKey = "socketControlMode"
     /// Legacy `UserDefaults` key from the old boolean enabled/disabled model.

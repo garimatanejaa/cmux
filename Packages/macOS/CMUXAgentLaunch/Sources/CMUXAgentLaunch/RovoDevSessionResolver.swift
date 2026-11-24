@@ -1,6 +1,7 @@
 import Foundation
 
-public enum RovoDevSessionResolver {
+public struct RovoDevSessionResolver {
+    public init() {}
     private struct RovoDevSessionCandidate {
         let sessionId: String
         let modified: Date

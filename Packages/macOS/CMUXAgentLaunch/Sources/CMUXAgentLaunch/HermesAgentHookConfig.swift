@@ -1,6 +1,7 @@
 import Foundation
 
-public enum HermesAgentHookConfig {
+public struct HermesAgentHookConfig {
+    public init() {}
     public struct Event: Equatable, Sendable {
         public var name: String
         public var command: String
@@ -439,7 +440,8 @@ public enum HermesAgentHookConfig {
     }
 }
 
-public enum HermesAgentHookAllowlist {
+public struct HermesAgentHookAllowlist {
+    public init() {}
     enum Error: Swift.Error, Equatable {
         case invalidRoot
     }

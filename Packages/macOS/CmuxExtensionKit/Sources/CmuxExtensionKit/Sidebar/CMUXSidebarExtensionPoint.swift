@@ -2,7 +2,8 @@ import Foundation
 
 /// Public identifiers for the CMUX sidebar ExtensionKit surface.
 @_spi(CmuxHostTransport)
-public enum CmuxSidebarExtensionPoint {
+public struct CmuxSidebarExtensionPoint {
+    public init() {}
     /// Base extension point identifier third-party sidebar extensions register against.
     ///
     /// Production builds use this value verbatim. Dev/dogfood builds may scope the point

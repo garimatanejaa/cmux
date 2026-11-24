@@ -11,7 +11,8 @@ import Foundation
 }
 
 @_spi(CmuxHostTransport)
-public enum CmuxSidebarXPCCodec {
+public struct CmuxSidebarXPCCodec {
+    public init() {}
     public static let maximumSnapshotPayloadBytes = 512 * 1024
     public static let maximumManifestPayloadBytes = 64 * 1024
     public static let maximumActionPayloadBytes = 8 * 1024

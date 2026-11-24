@@ -9,7 +9,8 @@ internal import CmuxMobileShell
 /// The probe discards decoded values and publishes only operation booleans, so
 /// chat descriptors, notification identifiers, session identifiers, and
 /// artifact metadata never enter the report.
-enum MobileIrohReleaseGateResponseValidator {
+struct MobileIrohReleaseGateResponseValidator {
+    package init() {}
     enum RPCMethodInventoryFailure: Equatable {
         case malformed
         case schemaMismatch

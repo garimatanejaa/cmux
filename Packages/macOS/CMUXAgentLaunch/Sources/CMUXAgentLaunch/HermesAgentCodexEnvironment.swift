@@ -1,7 +1,8 @@
 import Foundation
 
 /// Utilities for mapping Codex configuration into Hermes Agent's custom provider settings.
-public enum HermesAgentCodexEnvironment {
+public struct HermesAgentCodexEnvironment {
+    public init() {}
     /// The Hermes provider name used for Codex-compatible custom endpoints.
     public static let defaultProvider = "custom"
     /// The Hermes API mode used when talking to Codex-compatible responses endpoints.
