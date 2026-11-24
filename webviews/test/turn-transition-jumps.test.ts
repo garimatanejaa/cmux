@@ -68,7 +68,7 @@ await requireBrowserLane("turn-transition-jumps.test.ts", async () => {
   /// append-only instead (below).
   async function samples(scenario: Scenario, look = "", arm = "blocks"): Promise<Sample[]> {
     const { port } = vite!.httpServer!.address() as { port: number };
-    const query = `clock=frames&rows=1${look ? `&tailGlide=${look}` : ""}${arm ? `&arm=${arm}` : ""}`;
+    const query = `clock=frames&rows=1${look ? `&tailGlide=${look}` : ""}${arm ? `&arm=${arm}` : ""}${process.env.CMUX_TTJ_DBG ? "&dbg=1" : ""}`;
     const frames = await open120Hz(`http://127.0.0.1:${port}${PAGE}?${query}`, { clock: "frames" });
     try {
       await frames.page.waitForFunction(() => "__sendStream" in window);

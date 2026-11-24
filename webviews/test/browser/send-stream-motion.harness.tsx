@@ -193,6 +193,7 @@ function bottomInset(clipPath: string): number {
 }
 
 const sampleRows = query.get("rows") === "1";
+if (query.get("dbg") === "1") (globalThis as { __dbgChase?: unknown[] }).__dbgChase = [];
 /// `?rows=end` (send-stream-motion.test.ts): the rows only from the turn's end on, on the frame's one
 /// sampler, so the frames before it read as they always did; the frame before the end gets its rows
 /// as the end step begins (nothing has drawn since that frame).
@@ -316,7 +317,9 @@ const sampleFrame = () => {
   }
   const dock = document.querySelector<HTMLElement>(".acpmux-composer-box")?.getBoundingClientRect().top ?? 0;
   const readerRow = newest?.closest<HTMLElement>(".acpmux-row");
+  const dbgChase = (globalThis as { __dbgChase?: unknown[] }).__dbgChase;
   samples.push({
+    ...(dbgChase && { dbg: dbgChase.splice(0) }),
     ...(newest &&
       readerRow?.dataset.rowId && { reader: { id: readerRow.dataset.rowId, top: newest.getBoundingClientRect().top } }),
     tail: dock - bottom,

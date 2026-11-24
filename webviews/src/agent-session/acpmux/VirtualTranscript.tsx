@@ -1332,6 +1332,7 @@ function TranscriptView({
     // every streamed update the old path paid two getBoundingClientRect() calls even
     // though `moveAtOnce` skipped the only branch that used their result.
     if (moveAtOnce) {
+      (globalThis as { __dbgChase?: unknown[] }).__dbgChase?.push({ k: "atOnce" });
       chaseAnchor.current = undefined;
       resumeFollowMotion();
       chase.fit(below);
@@ -1368,6 +1369,7 @@ function TranscriptView({
     chase.fit(below);
     // A turn's end folding moves the rows itself (turnEndFold.ts): their motion is no move to chase.
     const turnEnding = thread.current?.hasAttribute(TURN_END_ATTR) === true;
+    (globalThis as { __dbgChase?: unknown[] }).__dbgChase?.push({ k: "chase", id: before?.id, was: before?.top, now, below, held, arrived, sent, turnEnding });
     if (before && now !== undefined && !moveAtOnce && !turnEnding)
       chase.shift(thread.current, now - before.top, below, held, arrived, sent);
     const view = pinView.current;
@@ -4712,6 +4714,7 @@ function TranscriptView({
           // within a landing frame's move, else within 50 ms at no more than a line a frame): nothing
           // settles on after the turn rests (base's glide ended there too, its room gone).
           const lineLeft = Boolean(oldRows.at(-1)?.below) && !rows.at(-1)?.below;
+          (globalThis as { __dbgChase?: unknown[] }).__dbgChase?.push({ k: "pass", lineLeft, sendWindow, sendLands, dockMoved, resizing, caughtUp, turnEnding, jumping, bottomStacking, heightFold: heightFoldPlaying(), working, slimFollow, n: rows.length, o: oldRows.length });
           // Only a live turn moves on the chase: a reply streaming, a send's rows, what a running
           // turn brings. The open's settle and an idle chat's passes (rows drawn at their measured
           // heights, a late read) land at once, before the frame paints, as base's follow does.
