@@ -231,9 +231,9 @@ extension AppOnboardingServices {
         }
         outcome = run.outcome
         let lastError = run.lastError, reveal = run.reveal, openedInFirstWindow = run.openedInFirstWindow
-        try await client.record(.finish(source: nil, cloudVMKeys: [], appVersion: appVersion))
-        // One workspace that did not open is logged; none opening is the run's failure.
+        // One not opening is logged; none opening fails the run before `finish`, so the next launch resumes it.
         if outcome.opened.isEmpty, let lastError { throw lastError }
+        try await client.record(.finish(source: nil, cloudVMKeys: [], appVersion: appVersion))
         // Set within the run, so whoever awaits the run reads it.
         if mode == .automatic, !outcome.opened.isEmpty { owner.classicImportNotice = ClassicImportStrings.notice(outcome.summary) }
 
