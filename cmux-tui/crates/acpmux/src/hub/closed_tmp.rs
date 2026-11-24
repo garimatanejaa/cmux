@@ -16,6 +16,9 @@ use super::*;
 /// How often closed sessions' folders still there are tried again.
 const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
+/// How long a pass waits for a session's `spawn_lock`.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// What one pass did, for its log line and the tests.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct FreedTmp {
@@ -92,8 +95,12 @@ impl Hub {
         let mut pass = FreedTmp::default();
         let mut aside = Vec::new();
         for session in candidates.iter().filter(|s| with_folder.contains(&s.id)) {
-            // A start under way holds it: that session is not closed for long.
-            let Ok(_spawning) = session.spawn_lock.try_lock() else { continue };
+            // A start under way holds it, and the session is read as closed again below; one that
+            // holds it longer than this is left to the next pass.
+            let Ok(_spawning) = tokio::time::timeout(LOCK_WAIT, session.spawn_lock.lock()).await
+            else {
+                continue;
+            };
             let current = self
                 .sessions
                 .lock()
@@ -172,6 +179,12 @@ mod tests {
         drop(store);
         let hub = Hub::new(cfg.clone(), crate::store::open(&cfg.store, &root).unwrap());
 
+        assert_eq!(hub.session_handles().len(), 4);
+        for id in [&closed, &held] {
+            let s = hub.resolve(id).unwrap();
+            assert_eq!(s.status(), SessionStatus::Closed, "{id}");
+            assert!(crate::agent::session_tmp::has_folder(id), "{id}");
+        }
         let pass = hub.free_closed_tmps(hub.session_handles()).await;
         assert_eq!(pass, FreedTmp { freed: 1, kept: 1 });
         assert!(!closed_dir.exists(), "the closed chat's folder stayed");
