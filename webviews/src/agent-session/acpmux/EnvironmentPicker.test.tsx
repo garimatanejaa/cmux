@@ -167,14 +167,18 @@ test("a machine picked while Cloud is the mode makes the chat a chat here again"
   expect(picks).toEqual(["gpu-box"]);
 });
 
-// Other devices (Austin, 2026-11-12): a new chat's combined list has This Mac, Cloud and Other
-// devices, whose count is the person's machines a chat can start on now; it opens those machines in
-// place (no Cloud machine), each saying how it connects, then Add Machine….
+// A new chat's list (Leo, 2026-11-23, of Other devices counting 51: "another chevron, just like how
+// cloud goes to another chevron"): This Mac, Cloud (a chevron), the person's own machines as rows
+// with ⌥⌘ keys, then Agent machines (a count and a chevron) that cascades BESIDE the list, where
+// acpmux's `group` says agent. Add Machine… ends the list.
 const DEVICES = [
   { id: "local", label: "This Mac", kind: "local" as const, connected: true },
-  { id: "studio", label: "studio", kind: "ssh" as const, connected: true },
-  { id: "laptop", label: "laptop", kind: "ssh" as const, state: "connecting" },
-  { id: "gpu-box", label: "gpu-box", kind: "ssh" as const, connected: true },
+  { id: "studio", label: "studio", kind: "ssh" as const, connected: true, group: "own" as const },
+  { id: "laptop", label: "laptop", kind: "ssh" as const, state: "connecting", group: "own" as const },
+  { id: "gpu-box", label: "gpu-box", kind: "ssh" as const, connected: true, group: "own" as const, liveSessions: 3 },
+  { id: "lane-1", label: "gcp-agent-lane-1", kind: "ssh" as const, connected: true, group: "agent" as const, liveSessions: 2 },
+  { id: "lane-2", label: "gcp-agent-lane-2", kind: "ssh" as const, connected: true, group: "agent" as const },
+  { id: "lane-3", label: "gcp-agent-lane-3", kind: "ssh" as const, state: "offline", group: "agent" as const },
   { id: "vm-1", label: "vm-1", kind: "cloud" as const, connected: true },
 ];
 
@@ -208,80 +212,172 @@ async function renderDevices(
   return { container, picks, connects };
 }
 
-const optionRows = () =>
-  [...document.querySelectorAll<HTMLElement>('.acpmux-env-popover [role="option"]')].filter(
+const optionRows = (scope = ".acpmux-env-popover") =>
+  [...document.querySelectorAll<HTMLElement>(`${scope} [role="option"]`)].filter(
     (option) => option.querySelector(".acpmux-env-row") !== null,
   );
 const rowLabel = (option: HTMLElement) => option.querySelector(".acpmux-menu-label")?.textContent ?? "";
+const cascadeRows = () => optionRows(".acpmux-env-cascade");
 
 // A new chat's list: Cloud is where it may run (`runMode`).
 const NEW_CHAT = { runMode: { mode: "persistent" as RunMode, onMode: () => undefined } };
 
-test("Other devices follows Cloud with the count of the person's machines a chat can start on", async () => {
+test("the list is This Mac, Cloud, the person's own machines, Agent machines, Add Machine…", async () => {
   const { container } = await renderDevices(DEVICES, NEW_CHAT);
   await open(container);
   expect(optionRows().map(rowLabel)).toEqual([
     translate("composer.thisMac"),
     translate("composer.cloud"),
-    translate("composer.otherDevices"),
+    "gpu-box",
+    "studio",
+    "laptop",
+    translate("composer.agentMachines"),
+    translate("composer.addMachine"),
   ]);
-  const row = document.querySelector('.acpmux-env-popover [data-action="otherDevices"]')!;
-  // studio and gpu-box are ready; laptop is still connecting and vm-1 is a Cloud machine.
+});
+
+test("Agent machines counts only the agent machines a chat can start on, and has a chevron", async () => {
+  const { container } = await renderDevices(DEVICES, NEW_CHAT);
+  await open(container);
+  const row = document.querySelector('.acpmux-env-popover [data-action="agentMachines"]')!;
+  // lane-1 and lane-2 are ready; lane-3 is offline and vm-1 is a Cloud machine.
   expect(row.querySelector(".acpmux-env-count")?.textContent).toBe("2");
   expect(row.querySelector(".acpmux-env-more-chevron")).not.toBeNull();
 });
 
-test("Other devices with no machine still shows, with no count, and opens Add Machine…", async () => {
-  const { container, connects } = await renderDevices([DEVICES[0]!, DEVICES[4]!]);
+test("only This Mac, Cloud and the person's own machines carry ⌥⌘ keys; an agent machine never does", async () => {
+  const { container } = await renderDevices(DEVICES, NEW_CHAT);
   await open(container);
-  const row = document.querySelector('.acpmux-env-popover [data-action="otherDevices"]')!;
-  expect(row.querySelector(".acpmux-env-count")).toBeNull();
-  await choose('[data-action="otherDevices"]');
-  expect(document.querySelector(".acpmux-env-popover .acpmux-env-heading")?.textContent).toBe(
-    translate("composer.otherDevices"),
+  const keys = optionRows().map((row) => row.querySelector(".acpmux-env-key")?.textContent ?? "");
+  expect(keys).toEqual(["⌥⌘1", "⌥⌘2", "⌥⌘3", "⌥⌘4", "", "", ""]);
+  await choose('[data-action="agentMachines"]');
+  expect(cascadeRows().some((row) => row.querySelector(".acpmux-env-key") !== null)).toBe(false);
+});
+
+test("a row says live sessions when acpmux says so, never SSH", async () => {
+  const { container } = await renderDevices(DEVICES, NEW_CHAT);
+  await open(container);
+  const descriptions = optionRows().map((row) => row.querySelector(".acpmux-menu-description")?.textContent ?? "");
+  expect(descriptions[2]).toBe(translate("composer.envLive", { n: 3 }));
+  expect(descriptions.join(" ")).not.toContain(translate("composer.envSSH"));
+});
+
+test("Agent machines opens beside the list: the list stays, ready machines first, the unreachable under Unavailable", async () => {
+  const { container, picks } = await renderDevices(DEVICES, NEW_CHAT);
+  await open(container);
+  await choose('[data-action="agentMachines"]');
+  // The parent list is still open and still lists its rows.
+  expect(optionRows().map(rowLabel)).toContain("studio");
+  expect(document.querySelector(".acpmux-env-cascade")).not.toBeNull();
+  expect(cascadeRows().map(rowLabel)).toEqual([
+    "gcp-agent-lane-1",
+    "gcp-agent-lane-2",
+    translate("composer.envUnavailableGroup", { n: 1 }),
+  ]);
+  expect(cascadeRows()[0]!.querySelector(".acpmux-menu-description")?.textContent).toBe(
+    translate("composer.envLive", { n: 2 }),
   );
-  expect(optionRows().map(rowLabel)).toEqual([translate("composer.addMachine")]);
+  // The parent stays clickable: a pick there closes everything.
+  await act(async () => optionRows().find((row) => rowLabel(row) === "studio")!.click());
+  await settle();
+  expect(picks).toEqual(["studio"]);
+  expect(document.querySelector(".acpmux-env-popover")).toBeNull();
+});
+
+test("a pick in the Agent machines cascade is the machine's pick", async () => {
+  const { container, picks } = await renderDevices(DEVICES, NEW_CHAT);
+  await open(container);
+  await choose('[data-action="agentMachines"]');
+  await act(async () => cascadeRows()[0]!.click());
+  await settle();
+  expect(picks).toEqual(["lane-1"]);
+  expect(document.querySelector(".acpmux-env-popover")).toBeNull();
+});
+
+test("← and Escape go back one level: the cascade closes, the list stays", async () => {
+  const { container } = await renderDevices(DEVICES, NEW_CHAT);
+  await open(container);
+  const key = async (target: Element, name: string) =>
+    act(async () => {
+      target.dispatchEvent(new dom!.window.KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }));
+    });
+  await choose('[data-action="agentMachines"]');
+  const field = () => document.querySelector<HTMLInputElement>(".acpmux-env-cascade input")!;
+  await key(field(), "ArrowLeft");
+  await settle();
+  expect(document.querySelector(".acpmux-env-cascade")).toBeNull();
+  expect(document.querySelector(".acpmux-env-popover")).not.toBeNull();
+  await choose('[data-action="agentMachines"]');
+  await key(field(), "Escape");
+  await settle();
+  expect(document.querySelector(".acpmux-env-cascade")).toBeNull();
+  expect(document.querySelector(".acpmux-env-popover")).not.toBeNull();
+});
+
+test("Cloud's chevron opens its options beside the list: Auto, checked while Cloud is the pick, then the slot's rows", async () => {
+  const slot: string[] = [];
+  const { container } = await renderDevices(DEVICES, {
+    runMode: { mode: "cloud" as RunMode, onMode: () => undefined },
+    cloudOptions: [{ id: "hybrid", label: "Hybrid start", onSelect: () => slot.push("hybrid") }],
+  });
+  await open(container);
+  const cloud = document.querySelector<HTMLElement>('.acpmux-env-popover [data-cascade="cloud"]')!;
+  await act(async () => cloud.dispatchEvent(new dom!.window.Event("pointerover", { bubbles: true })));
+  await settle();
+  const options = [...document.querySelectorAll<HTMLElement>(".ui-cascade-option")];
+  expect(options.map((option) => option.querySelector(".acpmux-menu-label")?.textContent)).toEqual([
+    translate("composer.cloudAuto"),
+    "Hybrid start",
+  ]);
+  expect(options[0]!.getAttribute("aria-checked")).toBe("true");
+  await act(async () => options[1]!.click());
+  await settle();
+  expect(slot).toEqual(["hybrid"]);
+  expect(document.querySelector(".acpmux-env-popover")).toBeNull();
+});
+
+test("typing searches every level: an agent machine is found from the list", async () => {
+  const many = [
+    ...DEVICES,
+    ...Array.from({ length: 8 }, (_, i) => ({
+      id: `fs-${i}`,
+      label: `fs-agent-lane-${i}`,
+      kind: "ssh" as const,
+      connected: true,
+      group: "agent" as const,
+    })),
+  ];
+  const { container } = await renderDevices(many, NEW_CHAT);
+  await open(container);
+  const field = document.querySelector<HTMLInputElement>(".acpmux-env-popover input")!;
+  await act(async () => {
+    const set = Object.getOwnPropertyDescriptor(dom!.window.HTMLInputElement.prototype, "value")!.set!;
+    set.call(field, "fs-agent-lane-3");
+    field.dispatchEvent(new dom!.window.Event("input", { bubbles: true }));
+  });
+  await settle();
+  expect(optionRows().map(rowLabel)).toEqual(["fs-agent-lane-3"]);
+});
+
+test("with no machine the list is This Mac, Cloud and Add Machine…, with no Agent machines row", async () => {
+  const { container, connects } = await renderDevices([DEVICES[0]!, DEVICES[7]!]);
+  await open(container);
+  expect(document.querySelector('.acpmux-env-popover [data-action="agentMachines"]')).toBeNull();
   await choose('[data-action="addMachine"]');
   expect(connects).toEqual(["addMachine"]);
 });
 
-test("Other devices opens the person's own machines, ready first, with how each connects and no Cloud machine", async () => {
-  const { container, picks } = await renderDevices(DEVICES);
-  await open(container);
-  await choose('[data-action="otherDevices"]');
-  expect(optionRows().map(rowLabel)).toEqual(["gpu-box", "studio", "laptop", translate("composer.addMachine")]);
-  const ready = optionRows()[0]!;
-  expect(ready.querySelector(".acpmux-menu-description")?.textContent).toBe(translate("composer.envSSH"));
-  expect(ready.querySelector('.acpmux-env-status[data-connected="true"]')).not.toBeNull();
-  // A machine still connecting is listed greyed with its state, and is no pick: the list stays open.
-  const laptop = optionRows()[2]!;
-  expect(laptop.querySelector('[data-ready="false"]')).not.toBeNull();
-  await act(async () => laptop.click());
-  await settle();
-  expect(picks).toEqual([]);
-  expect(document.querySelector(".acpmux-env-popover.acpmux-env-devices")).not.toBeNull();
-  // A ready one is the pick, and the list closes.
-  await choose('[data-kind="ssh"]');
-  expect(picks).toEqual(["gpu-box"]);
-  expect(document.querySelector(".acpmux-env-popover")).toBeNull();
-});
-
-test("a device picked stays checked in the main list", async () => {
+test("a device picked stays checked in the list", async () => {
   const picked = await renderDevices(DEVICES, { current: "studio", ...NEW_CHAT });
   await open(picked.container);
-  expect(optionRows().map(rowLabel)).toEqual([
-    translate("composer.thisMac"),
-    "studio",
-    translate("composer.cloud"),
-    translate("composer.otherDevices"),
-  ]);
-  expect(optionRows()[1]!.querySelector("[data-current]")).not.toBeNull();
+  const studio = optionRows().find((row) => rowLabel(row) === "studio")!;
+  expect(studio.querySelector("[data-current]")).not.toBeNull();
 });
 
-test("without otherDevices (a started chat, the machine list) the main list has no Other devices row", async () => {
+test("without otherDevices (a started chat, the machine list) the main list has no Agent machines row", async () => {
   const { container } = await renderDevices(DEVICES, { otherDevices: false });
   await open(container);
-  expect(document.querySelector('.acpmux-env-popover [data-action="otherDevices"]')).toBeNull();
+  expect(document.querySelector('.acpmux-env-popover [data-action="agentMachines"]')).toBeNull();
 });
 
 // cmux#47677: the Where menu's Cloud row with no run-mode rows (before the host's check answered, a

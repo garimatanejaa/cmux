@@ -4,6 +4,7 @@ import { MacBookGlyph } from "./MacBookGlyph";
 import { Combobox } from "../../ui/Combobox";
 import { ContextMenu } from "../../ui/ContextMenu";
 import { Popover } from "../../ui/Popover";
+import { CascadeMenu, CascadeOptions, type CascadeOption } from "../../ui/CascadeMenu";
 import { usePopoverTrigger } from "../../ui/popoverTrigger";
 import { translate as t, type StringKey } from "./i18n";
 import {
@@ -13,11 +14,10 @@ import {
   type OffloadKind,
   type SavedEnvironment,
   environmentDigit,
-  environmentForDigit,
   environmentReady,
   environmentSections,
   environmentUnavailable,
-  numberedEnvironments,
+  numberedPlaces,
   orderEnvironments,
   savedEnvironmentIsFolder,
   savedEnvironmentLabel,
@@ -127,6 +127,7 @@ export function EnvironmentPicker({
   unavailableExpanded = false,
   card,
   otherDevices = false,
+  cloudOptions,
 }: {
   label: string;
   /// The name automation opens it by (`openPicker`).
@@ -193,6 +194,9 @@ export function EnvironmentPicker({
   /// opens the person's own machines (no Cloud ones) in place, then Add Machine… (Austin,
   /// 2026-11-12). Needs `onConnect`; a started chat's list is its move instead.
   otherDevices?: boolean;
+  /// With `otherDevices`: the rows of Cloud's cascade after Auto (each cloud we serve, Hybrid start).
+  /// Auto, which is the Cloud row's own click, always heads it.
+  cloudOptions?: readonly CascadeOption[];
 }) {
   // A picked saved environment is the current row: every machine row is then a change. One that is
   // only a folder on this computer leaves This Mac the current row.
@@ -213,7 +217,18 @@ export function EnvironmentPicker({
   const [listOpen, setListOpen] = useState(false);
   // Which list is open: This Mac and Cloud, every machine (Machines… on the right-click menu), a
   // started chat's Move to… targets, or a new chat's Other devices.
-  const [list, setList] = useState<"main" | "machines" | "moves" | "devices">("main");
+  const [list, setList] = useState<"main" | "machines" | "moves">("main");
+  // The cascade beside the list (ui/CascadeMenu.tsx): Cloud's options or the Agent machines, with the
+  // row it opens beside, whether a key opened it (focus moves in), and the agent list's own search
+  // and Unavailable group.
+  const [cascade, setCascade] = useState<"cloud" | "agents" | undefined>(undefined);
+  const [cascadeAnchor, setCascadeAnchor] = useState<HTMLElement | null>(null);
+  const [cascadeFocus, setCascadeFocus] = useState(false);
+  const [agentQuery, setAgentQuery] = useState("");
+  const [showUnavailableAgents, setShowUnavailableAgents] = useState(unavailableExpanded);
+  const searchField = useRef<HTMLInputElement>(null);
+  const agentField = useRef<HTMLInputElement>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const trigger = useRef<HTMLButtonElement>(null);
   const escaped = useRef(false);
   const { control, anchor, open, setOpen: setPopoverOpen, side, flip } = useLocationPopover();
@@ -237,6 +252,10 @@ export function EnvironmentPicker({
   const reset = () => {
     setQuery("");
     setList("main");
+    setCascade(undefined);
+    setCascadeFocus(false);
+    setAgentQuery("");
+    setShowUnavailableAgents(unavailableExpanded);
     setHighlightAuto(true);
     setShowUnavailable(unavailableExpanded);
   };
@@ -287,35 +306,53 @@ export function EnvironmentPicker({
   const sections = useMemo(() => environmentSections(environments), [environments]);
   const isLocalId = (id: string) => sections.get(id) === "local";
   const isLocal = (environment: Environment) => isLocalId(environment.id);
-  const numbers = useMemo(
-    () => new Map(numberedEnvironments(environments).map((environment, index) => [environment.id, index + 1])),
-    [environments],
-  );
-  // Only the machine list searches, and only where it is long (Leo, 2026-10-31): a few machines are
-  // read at a glance, and the main list is two rows.
-  const machineList = list === "machines" || list === "devices" || listRows === "machines";
-  // Other devices: the person's own machines, every one that is neither this Mac nor a Cloud
-  // machine (the machine control's `ownOnly`), in the list's order.
-  // In Where it is the third row whatever the setup actions; in the combined list only where a
-  // machine can be added.
+  // Other devices, as Leo asked ("another chevron, just like how cloud goes to another chevron"):
+  // the person's own machines are rows of the list (`devices`, acpmux's `group` own); the machines
+  // agents run on (`agents`: lane VMs, swarms, control planes) are one row, Agent machines, that
+  // cascades beside the list. In Where it is so whatever the setup actions; in the combined list
+  // only where a machine can be added. Cloud machines are Cloud's, in neither.
   const offersDevices = otherDevices && (listRows === "where" || (listRows === "combined" && onConnect !== undefined));
+  const isPlainMachine = (environment: Environment) =>
+    environment.kind !== "cloud" && !isCloudMachineRow(environment) && sections.get(environment.id) !== "local";
   const devices = useMemo(
     () =>
       offersDevices
         ? orderEnvironments(environments).filter(
-            (environment) =>
-              sections.get(environment.id) !== "local" &&
-              environment.kind !== "cloud" &&
-              !isCloudMachineRow(environment),
+            (environment) => isPlainMachine(environment) && sections.get(environment.id) === "mine",
           )
         : [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [offersDevices, environments, sections],
   );
-  // What its row counts: the ones a chat can start on now.
-  const devicesReady = devices.filter(environmentReady).length;
-  const searchable =
-    machineList &&
-    (list === "devices" ? devices.length : environments.length + listedSaved.length) >= ENVIRONMENT_SEARCH_MIN;
+  const agents = useMemo(
+    () =>
+      offersDevices
+        ? orderEnvironments(environments).filter(
+            (environment) => isPlainMachine(environment) && sections.get(environment.id) === "fleet",
+          )
+        : [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [offersDevices, environments, sections],
+  );
+  // What the Agent machines row counts: the ones a chat can start on now, never the unreachable.
+  const agentsReady = agents.filter(environmentReady).length;
+  // Cloud's row has a cascade (Auto, each cloud, Hybrid start) beside a new chat's list.
+  const cloudCascade = offersDevices && runMode !== undefined;
+  // ⌥⌘1–9: This Mac, Cloud, then the person's own machines a chat can start on; never an agent machine.
+  const places = useMemo(() => numberedPlaces(environments, cloudCascade), [environments, cloudCascade]);
+  const numbers = useMemo(
+    () =>
+      new Map(places.flatMap((place, index) => (place === "cloud" ? [] : [[place.id, index + 1] as const]))),
+    [places],
+  );
+  const cloudNumber = places.indexOf("cloud") + 1 || undefined;
+  // Only the machine list searches, and only where it is long (Leo, 2026-10-31): a few machines are
+  // read at a glance, and the main list is two rows. A new chat's list searches once its machines
+  // are many, across every level (what is typed also finds an agent machine).
+  const machineList = list === "machines" || listRows === "machines";
+  const searchable = offersDevices
+    ? devices.length + agents.length >= ENVIRONMENT_SEARCH_MIN
+    : machineList && environments.length + listedSaved.length >= ENVIRONMENT_SEARCH_MIN;
   const words = useMemo(() => query.trim().toLowerCase().split(/\s+/).filter(Boolean), [query]);
   const shown = useMemo(
     () =>
@@ -471,18 +508,19 @@ export function EnvironmentPicker({
     icon: action.icon,
   }));
   const continueOn: Action[] = card ? (opensMoves ? targetActions : move ? [move] : []) : [];
-  // Other devices: shown whenever a new chat can add a machine, none listed yet included, so the
-  // person finds where their machines go; it opens their list in place, as Move to… does.
-  const devicesMenu: Action | undefined = offersDevices
-    ? { value: DEVICES_MENU, text: t("composer.otherDevices"), kind: "local", run: () => undefined }
-    : undefined;
+  // Agent machines: one row after the person's own machines, shown while any is listed; it opens a
+  // cascade beside the list, with its own search.
+  const agentsMenu: Action | undefined =
+    offersDevices && agents.length > 0
+      ? { value: AGENTS_MENU, text: t("composer.agentMachines"), kind: "local", run: () => undefined }
+      : undefined;
   const actions: Action[] = [
     ...cardActions,
     ...(move ? [move] : []),
     ...(here ? [here] : []),
     ...targetActions,
     ...(cloud ? [cloud] : []),
-    ...(devicesMenu ? [devicesMenu] : []),
+    ...(agentsMenu ? [agentsMenu] : []),
     ...(addMachine ? [addMachine] : []),
   ];
   // The right-click menu; rebuilt each render, as its items are a handful and read the open state.
@@ -527,33 +565,33 @@ export function EnvironmentPicker({
     checkedRow !== undefined && !isLocalId(checkedRow) && (positions.has(checkedRow) || checkedRow.startsWith(SAVED))
       ? checkedRow
       : undefined;
-  const main = card
-    ? [...cardActions, ...continueOn].map((action) => action.value)
-    : [
-        ...ordered.filter(isLocal).map((environment) => environment.id),
-        ...(pickedOther ? [pickedOther] : []),
-        ...(move ? [move.value] : []),
-        ...(cloudRow ? [cloudRow] : []),
-        ...(devicesMenu ? [devicesMenu.value] : []),
-      ];
+  const envById = new Map(ordered.map((environment) => [environment.id, environment] as const));
   // The machines acpmux cannot reach for long, behind the lists' Unavailable row (Leo, 2026-11-09:
   // "drop retired and unreachable machines from the list, or group them at the bottom").
   const unavailableRow = (value: string) => {
-    const environment = positions.get(value)?.environment;
+    const environment = envById.get(value);
     return (
       environment !== undefined && !isCloudMachineRow(environment) && environmentUnavailable(environment, groupedAt)
     );
   };
-  const grouped = (rows: readonly string[], tail: readonly string[]) =>
+  const grouped = (
+    rows: readonly string[],
+    tail: readonly string[],
+    own: { searching: boolean; toggle: string; expanded: boolean } = {
+      searching: words.length > 0,
+      toggle: UNAVAILABLE,
+      expanded: showUnavailable,
+    },
+  ) =>
     groupUnavailableRows({
       rows,
       actions: tail,
       unavailable: unavailableRow,
       ...(checkedRow !== undefined ? { kept: checkedRow } : {}),
-      searching: words.length > 0,
+      searching: own.searching,
       group: unavailableGroup,
-      toggle: UNAVAILABLE,
-      expanded: showUnavailable,
+      toggle: own.toggle,
+      expanded: own.expanded,
     });
   // Machines…: every machine, This Mac first, and New Tab's saved environments, as the search keeps them.
   const machinesGrouped = grouped(
@@ -574,12 +612,7 @@ export function EnvironmentPicker({
     listRows === "where" &&
     checkedRow?.startsWith(SAVED) === true &&
     saved?.environments.find((environment) => SAVED + environment.id === checkedRow)?.kind === "local";
-  const anotherPicked = checkedRow !== undefined && !isLocalId(checkedRow) && !cloudChecked && !savedLocal;
-  const where = [
-    ...ordered.filter(isLocal).map((environment) => environment.id),
-    ...(cloudRow ? [cloudRow] : []),
-    ...(devicesMenu ? [devicesMenu.value] : []),
-  ];
+  const agentPicked = checkedRow !== undefined && agents.some((environment) => environment.id === checkedRow);
   // Which machine: the machines a chat can start on first, whatever their kind, then the rest
   // greyed; no Cloud row; Add Machine… last. Saved environments stay behind Machines….
   const readyFirst = (items: Environment[]) => [
@@ -595,35 +628,68 @@ export function EnvironmentPicker({
     ],
     addMachine && words.length === 0 ? [addMachine.value] : [],
   );
-  // Other devices' list: the ready ones first, the rest greyed with their state (the long-down ones
-  // under Unavailable), as the search keeps them; Add Machine… last.
-  const shownIds = useMemo(() => new Set(shown.map((environment) => environment.id)), [shown]);
-  const devicesGrouped = grouped(
-    readyFirst(devices.filter((environment) => shownIds.has(environment.id))).map((environment) => environment.id),
-    addMachine && words.length === 0 ? [addMachine.value] : [],
+  // The new chat's list: This Mac, Cloud, the person's own machines (the ready ones first, the rest
+  // greyed with their state, the long-down ones under Unavailable), Agent machines, Add Machine….
+  // Typing searches every level: the matches are one flat list, each agent machine among them.
+  const liveLabel = (environment: Environment) =>
+    environment.liveSessions !== undefined && environment.liveSessions > 0
+      ? t("composer.envLive", { n: environment.liveSessions })
+      : undefined;
+  const searchingPlaces = offersDevices && words.length > 0;
+  const ownGrouped = grouped(readyFirst(devices).map((environment) => environment.id), []);
+  const placeRows: string[] = !offersDevices
+    ? []
+    : searchingPlaces
+      ? shown.filter((environment) => !isLocal(environment) && isPlainMachine(environment)).map((environment) => environment.id)
+      : [
+          ...ownGrouped.rows,
+          ...(agentsMenu ? [agentsMenu.value] : []),
+          ...(addMachine ? [addMachine.value] : []),
+        ];
+  const placeLocal = (offersDevices ? shown : ordered).filter(isLocal).map((environment) => environment.id);
+  const placeCloud = cloudRow && (!searchingPlaces || matches(words, t("composer.cloud"))) ? [cloudRow] : [];
+  const main = card
+    ? [...cardActions, ...continueOn].map((action) => action.value)
+    : [
+        ...placeLocal,
+        ...(pickedOther && !offersDevices ? [pickedOther] : []),
+        ...(move ? [move.value] : []),
+        ...placeCloud,
+        ...placeRows,
+      ];
+  const where = [...placeLocal, ...placeCloud, ...placeRows];
+  // The Agent machines cascade: its own search, the ready machines first, the long-down ones under
+  // its own Unavailable row.
+  const agentWords = useMemo(() => agentQuery.trim().toLowerCase().split(/\s+/).filter(Boolean), [agentQuery]);
+  const agentsGrouped = grouped(
+    readyFirst(
+      agents.filter((environment) =>
+        matches(agentWords, `${environment.label} ${t(SECTION_LABELS.fleet)} ${liveLabel(environment) ?? ""}`),
+      ),
+    ).map((environment) => environment.id),
+    [],
+    { searching: agentWords.length > 0, toggle: UNAVAILABLE_AGENTS, expanded: showUnavailableAgents },
   );
   const machineChoices = choicesGrouped.rows;
   const machines = machinesGrouped.rows;
   const unavailableCount =
-    list === "devices"
-      ? devicesGrouped.count
+    offersDevices && list === "main" && !searchingPlaces
+      ? ownGrouped.count
       : listRows === "machines" && list === "main"
         ? choicesGrouped.count
         : machinesGrouped.count;
   const suggestions =
     list === "moves"
       ? moveRows
-      : list === "devices"
-        ? devicesGrouped.rows
-        : listRows === "machines" && list === "main"
-          ? machineChoices
-          : machineList
-            ? machines
-            : listRows === "where" || listRows === "run"
-              ? listRows === "run"
-                ? [...ordered.filter(isLocal).map((environment) => environment.id), ...(cloudRow ? [cloudRow] : [])]
-                : where
-              : main;
+      : listRows === "machines" && list === "main"
+        ? machineChoices
+        : machineList
+          ? machines
+          : listRows === "where" || listRows === "run"
+            ? listRows === "run"
+              ? [...ordered.filter(isLocal).map((environment) => environment.id), ...(cloudRow ? [cloudRow] : [])]
+              : where
+            : main;
   // The rows as they settle while the list is open (rowPresence.ts): it opens with its final rows,
   // and a row the data adds or drops while it stays open grows or shrinks in place. Another list
   // (Machines…) or a search replaces the rows at once.
@@ -638,8 +704,9 @@ export function EnvironmentPicker({
   // Cloud's row shows Sandboxed instead while ⌥ is held (or, once picked, until it is).
   const sandboxFace = offersSandbox && sandboxed !== alternate;
 
-  const latest = useRef({ ordered, current: checkedRow, onPick, persistent });
-  latest.current = { ordered, current: checkedRow, onPick, persistent };
+  const pickCloudRef = useRef<() => void>(() => undefined);
+  const latest = useRef({ places, current: checkedRow, onPick, persistent, cloudPicked: clouded });
+  latest.current = { places, current: checkedRow, onPick, persistent, cloudPicked: clouded };
   useMachineRefresh(open, onOpen);
 
   const close = () => {
@@ -669,7 +736,15 @@ export function EnvironmentPicker({
       const scope = control.current?.closest(".acpmux-composer, .nt-composer");
       const active = document.activeElement;
       if (!openRef.current && !(scope && active && scope.contains(active))) return;
-      const environment = environmentForDigit(latest.current.ordered, digit);
+      const environment = latest.current.places[digit - 1];
+      if (environment === "cloud") {
+        // Cloud is a place the digits number too (⌥⌘2); picked already, a closed picker leaves the key to the app.
+        if (!openRef.current && latest.current.cloudPicked) return;
+        event.preventDefault();
+        event.stopPropagation();
+        pickCloudRef.current();
+        return;
+      }
       // A digit that changes nothing in a closed picker stays the app's (a keymap may bind ⌥⌘1–9).
       if (!environment || (!openRef.current && environment.id === latest.current.current)) return;
       event.preventDefault();
@@ -686,6 +761,7 @@ export function EnvironmentPicker({
 
   // The row Base UI highlighted by itself (reason "none"), not by the arrow keys or the pointer.
   const autoHighlighted = useRef<string | undefined>(undefined);
+  const highlighted = useRef<string | undefined>(undefined);
   const submit = (value: string) => {
     // A row on its way out (rowPresence.ts) keeps its place in the list but is no pick. It is not
     // a disabled suggestion: Combobox moves those to the end, so the row would jump while it goes.
@@ -695,10 +771,19 @@ export function EnvironmentPicker({
       setShowUnavailable((shown) => !shown);
       return;
     }
+    if (value === UNAVAILABLE_AGENTS) {
+      setShowUnavailableAgents((shown) => !shown);
+      return;
+    }
+    // Agent machines opens its cascade beside the list, focus in it; the list stays open.
+    if (value === AGENTS_MENU) {
+      openCascade("agents", true);
+      return;
+    }
     const action = actions.find((candidate) => candidate.value === value);
     // A machine still connecting or down is listed, greyed, in its place, but is no pick: the list
     // stays open.
-    const machine = positions.get(value)?.environment;
+    const machine = envById.get(value);
     if (machine && !environmentReady(machine) && !isCloudMachineRow(machine)) return;
     // A move that would refuse is no pick either: its row already says why.
     if (action?.reason) return;
@@ -706,12 +791,6 @@ export function EnvironmentPicker({
     if (value === MOVE_MENU) {
       setQuery("");
       setList("moves");
-      return;
-    }
-    // Other devices opens the person's machines in place, the same way.
-    if (value === DEVICES_MENU) {
-      setQuery("");
-      setList("devices");
       return;
     }
     close();
@@ -734,6 +813,44 @@ export function EnvironmentPicker({
     else if (value.startsWith(SAVED)) saved?.onPick(value.slice(SAVED.length));
     else if (machine) onPick(value);
   };
+  pickCloudRef.current = () => submit(CLOUD_RUN);
+  // The cascades: opened by the pointer over their row (focus stays in the list, so typing still
+  // searches there) or by a key or a click (focus moves in). The list stays open and clickable.
+  const cascadeRowOf = (kind: "cloud" | "agents") =>
+    searchField.current
+      ?.closest(".acpmux-env-popover")
+      ?.querySelector<HTMLElement>(`[data-cascade="${kind}"]`) ?? null;
+  const openCascade = (kind: "cloud" | "agents", byKey: boolean, row?: HTMLElement) => {
+    clearTimeout(closeTimer.current);
+    setCascadeAnchor(row ?? cascadeRowOf(kind));
+    setCascade(kind);
+    setCascadeFocus(byKey);
+    if (byKey && kind === "agents") requestAnimationFrame(() => agentField.current?.focus());
+  };
+  const closeCascade = (refocus: boolean) => {
+    clearTimeout(closeTimer.current);
+    setCascade(undefined);
+    setCascadeFocus(false);
+    setAgentQuery("");
+    if (refocus) searchField.current?.focus();
+  };
+  const hoverRow = (target: EventTarget) => {
+    const row = target instanceof Element ? target.closest<HTMLElement>(".acpmux-env-row") : null;
+    if (!row) return;
+    const kind = row.dataset.cascade;
+    if (kind === "agents" || kind === "cloud") {
+      if (cascade !== kind || cascadeAnchor !== row) openCascade(kind, false, row);
+      else clearTimeout(closeTimer.current);
+    } else if (cascade !== undefined) {
+      // A short grace, so a pointer crossing a neighbour on its way to the cascade keeps it.
+      clearTimeout(closeTimer.current);
+      closeTimer.current = setTimeout(() => {
+        const inside = document.activeElement?.closest(".ui-cascade") !== null;
+        closeCascade(inside);
+      }, 250);
+    }
+  };
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
   const row = (value: string): React.ReactNode => {
     const motion = presence.motion(value);
     if (motion === "leave") return drawn.current.get(value) ?? null;
@@ -742,7 +859,7 @@ export function EnvironmentPicker({
     drawn.current.set(value, React.cloneElement(node, { "data-row-motion": "leave" }));
     return motion ? React.cloneElement(node, { "data-row-motion": motion }) : node;
   };
-  const rowContent = (value: string) => {
+  const rowContent = (value: string, unavailableN: number = unavailableCount, agentRow = false) => {
     if (value === CLOUD_RUN && sandboxFace) {
       return (
         <span
@@ -773,6 +890,7 @@ export function EnvironmentPicker({
               className="acpmux-location-row acpmux-env-row acpmux-env-new"
               data-kind="cloud"
               data-mode="cloud"
+              data-cascade={cloudCascade ? "cloud" : undefined}
               data-current={checked ? "" : undefined}
             >
               <EnvironmentIcon kind="cloud" />
@@ -782,25 +900,41 @@ export function EnvironmentPicker({
                   <span className="acpmux-menu-description">{runDetails.cloud}</span>
                 )}
               </span>
-              <span className="acpmux-location-check" aria-hidden="true">
-                {checked && <CheckIcon />}
-              </span>
+              {cloudNumber !== undefined && digits && <kbd className="acpmux-env-key">⌥⌘{cloudNumber}</kbd>}
+              {cloudCascade ? (
+                // A click is Auto; the chevron opens Cloud's options beside the list.
+                <>
+                  {checked && (
+                    <span className="acpmux-location-check" aria-hidden="true">
+                      <CheckIcon />
+                    </span>
+                  )}
+                  <span className="acpmux-location-check acpmux-env-more-chevron" aria-hidden="true">
+                    <ChevronIcon />
+                  </span>
+                </>
+              ) : (
+                <span className="acpmux-location-check" aria-hidden="true">
+                  {checked && <CheckIcon />}
+                </span>
+              )}
             </span>
           )}
         </WithFacts>
       );
     }
-    if (value === UNAVAILABLE) {
+    if (value === UNAVAILABLE || value === UNAVAILABLE_AGENTS) {
+      const expanded = value === UNAVAILABLE_AGENTS ? showUnavailableAgents : showUnavailable;
       return (
         <span
           className="acpmux-location-row acpmux-env-row acpmux-env-new acpmux-env-unavailable"
           data-action="unavailable"
-          data-expanded={showUnavailable ? "" : undefined}
-          aria-expanded={showUnavailable}
+          data-expanded={expanded ? "" : undefined}
+          aria-expanded={expanded}
         >
           <UnavailableChevron />
           <span className="acpmux-menu-text acpmux-location-name">
-            <span className="acpmux-menu-label">{t("composer.envUnavailableGroup", { n: unavailableCount })}</span>
+            <span className="acpmux-menu-label">{t("composer.envUnavailableGroup", { n: unavailableN })}</span>
           </span>
           <span className="acpmux-location-check" aria-hidden="true" />
         </span>
@@ -810,7 +944,7 @@ export function EnvironmentPicker({
     if (action) {
       const checked =
         action === here ||
-        (action === devicesMenu && listRows === "where" && anotherPicked) ||
+        (action === agentsMenu && agentPicked) ||
         (action === cloud && listRows === "where" && cloudChecked);
       return (
         <span
@@ -822,14 +956,15 @@ export function EnvironmentPicker({
               ? "addMachine"
               : value === MOVE_MENU
                 ? "moveTo"
-                : value === DEVICES_MENU
-                  ? "otherDevices"
+                : value === AGENTS_MENU
+                  ? "agentMachines"
                   : value === MOVE_HERE
                     ? "moveHere"
                     : value.startsWith(MOVE_TO)
                       ? "moveTarget"
                       : undefined
           }
+          data-cascade={value === AGENTS_MENU ? "agents" : undefined}
           data-current={checked ? "" : undefined}
           data-ready={action.reason ? "false" : undefined}
           aria-disabled={action.reason ? true : undefined}
@@ -838,8 +973,8 @@ export function EnvironmentPicker({
             action.icon
           ) : value === MOVE_MENU ? (
             <MoveIcon />
-          ) : value === DEVICES_MENU ? (
-            <DevicesIcon />
+          ) : value === AGENTS_MENU ? (
+            <ServerIcon />
           ) : value === MOVE_HERE || value.startsWith(MOVE_TO) ? (
             <EnvironmentIcon kind={action.kind} {...(action.kind === "cloud" ? { name: action.text } : {})} />
           ) : action === addMachine ? (
@@ -851,15 +986,15 @@ export function EnvironmentPicker({
             <span className="acpmux-menu-label">{action.text}</span>
             {action.reason && <span className="acpmux-menu-description">{action.reason}</span>}
           </span>
-          {/* How many of the person's machines a chat can start on now; none says nothing. */}
-          {value === DEVICES_MENU && devicesReady > 0 && <span className="acpmux-env-count">{devicesReady}</span>}
-          {/* Where's Other devices is checked while one of them is the pick; its chevron still opens them. */}
-          {value === DEVICES_MENU && checked && (
+          {/* How many agent machines a chat can start on now; the unreachable never count. */}
+          {value === AGENTS_MENU && agentsReady > 0 && <span className="acpmux-env-count">{agentsReady}</span>}
+          {/* Checked while an agent machine is the pick; its chevron still opens them. */}
+          {value === AGENTS_MENU && checked && (
             <span className="acpmux-location-check" aria-hidden="true">
               <CheckIcon />
             </span>
           )}
-          {value === MOVE_MENU || value === DEVICES_MENU ? (
+          {value === MOVE_MENU || value === AGENTS_MENU ? (
             <span className="acpmux-location-check acpmux-env-more-chevron" aria-hidden="true">
               <ChevronIcon />
             </span>
@@ -890,10 +1025,9 @@ export function EnvironmentPicker({
         </span>
       );
     }
-    const position = positions.get(value);
-    if (!position) return null;
-    const { environment } = position;
-    const number = numbers.get(environment.id);
+    const environment = envById.get(value);
+    if (!environment) return null;
+    const number = agentRow ? undefined : numbers.get(environment.id);
     const ready = environmentReady(environment);
     // An account Cloud machine acpmux does not list is a pick (it resumes or opens), not greyed.
     const greyed = !ready && !isCloudMachineRow(environment);
@@ -925,9 +1059,10 @@ export function EnvironmentPicker({
               {listRows === "run" && runDetails && isLocal(environment) && (
                 <span className="acpmux-menu-description">{runDetails.local}</span>
               )}
-              {/* Other devices' rows say how each connects, in the words the search matches. */}
-              {list === "devices" && (
-                <span className="acpmux-menu-description">{t(KIND_LABELS[environment.kind])}</span>
+              {/* A machine of a new chat's list says how many sessions run on it now, or nothing: "SSH"
+                  said the same on every row. */}
+              {offersDevices && liveLabel(environment) && (
+                <span className="acpmux-menu-description">{liveLabel(environment)}</span>
               )}
             </span>
             {/* A machine a chat cannot start on yet says why, greyed; one that can shows a status dot.
@@ -938,18 +1073,18 @@ export function EnvironmentPicker({
                 {environment.loadWarning}
               </span>
             )}
-            {/* Other devices marks every machine a chat can start on with the online dot. */}
+            {/* A new chat's machines mark each one a chat can start on with the online dot. */}
             {ready &&
               !environment.loadWarning &&
               environment.kind !== "local" &&
-              (environment.connected !== undefined || list === "devices") && (
+              (environment.connected !== undefined || offersDevices) && (
                 <span
                   className="acpmux-env-status"
-                  data-connected={String(list === "devices" || environment.connected)}
+                  data-connected={String(offersDevices || environment.connected)}
                 >
                   <span className="acpmux-env-status-text">
                     {t(
-                      list === "devices" || environment.connected
+                      offersDevices || environment.connected
                         ? "composer.envConnected"
                         : "composer.envNotConnected",
                     )}
@@ -1015,7 +1150,6 @@ export function EnvironmentPicker({
           (machineList ? " acpmux-env-machines" : "") +
           ` acpmux-env-rows-${listRows}` +
           (list === "moves" ? " acpmux-env-moves" : "") +
-          (list === "devices" ? " acpmux-env-devices" : "") +
           (highlightAuto && query.trim() === "" ? " acpmux-env-highlight-auto" : "") +
           (card ? " acpmux-env-card" : "")
         }
@@ -1027,44 +1161,127 @@ export function EnvironmentPicker({
         {card?.header}
         {listRows === "run" && <div className="acpmux-env-heading">{t("composer.whereRun")}</div>}
         {list === "moves" && <div className="acpmux-env-heading">{t("composer.moveToMenu")}</div>}
-        {list === "devices" && <div className="acpmux-env-heading">{t("composer.otherDevices")}</div>}
-        <Combobox
-          suggestions={presence.rows}
-          // A short list has no search: the field only carries the arrows, Return and Escape.
-          onQuery={searchable ? setQuery : () => undefined}
-          onSubmit={submit}
-          onCancel={close}
-          onCommand={(event) => {
-            if (event.key === "Escape") escaped.current = true;
-            if (event.key === "Tab") event.preventDefault();
-            // Return runs an action (Cloud opens New Cloud Machine; Move to Cloud moves the chat)
-            // only once the arrow keys or the pointer reached it, never when Base UI highlighted it on
-            // its own: a search that leaves no machine moves that highlight onto an action.
-            if (event.key === "Enter" && autoHighlighted.current?.startsWith(ACTION)) {
-              event.preventDefault();
-              event.preventBaseUIHandler?.();
+        {/* The pointer over a row opens or closes its cascade; the wrapper draws nothing. */}
+        <div className="acpmux-env-hover" onPointerOver={offersDevices ? (event) => hoverRow(event.target) : undefined}>
+          <Combobox
+            suggestions={presence.rows}
+            // A short list has no search: the field only carries the arrows, Return and Escape.
+            onQuery={searchable ? setQuery : () => undefined}
+            onSubmit={submit}
+            onCancel={close}
+            // Focus moves into a cascade and back, so leaving the field is no cancel.
+            cancelOnBlur={!offersDevices}
+            inputRef={searchField}
+            onCommand={(event) => {
+              if (event.key === "Escape") escaped.current = true;
+              if (event.key === "Tab") event.preventDefault();
+              // → opens the cascade of the highlighted row (Cloud's options, the Agent machines).
+              if (event.key === "ArrowRight" && offersDevices && event.currentTarget.value === "") {
+                const kind =
+                  highlighted.current === AGENTS_MENU
+                    ? "agents"
+                    : highlighted.current === CLOUD_RUN && cloudCascade
+                      ? "cloud"
+                      : undefined;
+                if (kind) {
+                  event.preventDefault();
+                  openCascade(kind, true);
+                }
+              }
+              // Return runs an action (Cloud opens New Cloud Machine; Move to Cloud moves the chat)
+              // only once the arrow keys or the pointer reached it, never when Base UI highlighted it on
+              // its own: a search that leaves no machine moves that highlight onto an action.
+              if (event.key === "Enter" && autoHighlighted.current?.startsWith(ACTION)) {
+                event.preventDefault();
+                event.preventBaseUIHandler?.();
+              }
+            }}
+            onHighlight={(highlightedValue, by) => {
+              highlighted.current = highlightedValue;
+              autoHighlighted.current = by === "none" ? highlightedValue : undefined;
+              setHighlightAuto(by === "none");
+            }}
+            label={searchable ? t("composer.environmentSearch") : label}
+            {...(searchable ? { placeholder: t("composer.environmentSearch") } : {})}
+            inputClassName="acpmux-location-search"
+            listClassName="acpmux-location-folders"
+            itemClassName="acpmux-menu-item"
+            renderItem={row}
+            autoHighlight
+            inline
+          />
+        </div>
+        {machineList && query.trim() !== "" && shown.length === 0 && savedShown.length === 0 && (
+          <div className="acpmux-location-empty">{t("composer.environmentNone")}</div>
+        )}
+        {searchingPlaces && where.length === 0 && (
+          <div className="acpmux-location-empty">{t("composer.environmentNone")}</div>
+        )}
+        {offersDevices && (
+          <CascadeMenu
+            open={open && cascade !== undefined}
+            anchor={cascadeAnchor}
+            label={cascade === "cloud" ? t("composer.cloud") : t("composer.agentMachines")}
+            focusIn={cascadeFocus}
+            onClose={closeCascade}
+            onPointerEnter={() => clearTimeout(closeTimer.current)}
+            className={
+              "acpmux-menu acpmux-location-menu acpmux-env-popover acpmux-env-cascade " +
+              (cascade === "agents" ? "acpmux-env-machines acpmux-env-agents" : "acpmux-env-cloud-cascade")
             }
-          }}
-          onHighlight={(highlighted, by) => {
-            autoHighlighted.current = by === "none" ? highlighted : undefined;
-            setHighlightAuto(by === "none");
-          }}
-          label={searchable ? t("composer.environmentSearch") : label}
-          {...(searchable ? { placeholder: t("composer.environmentSearch") } : {})}
-          inputClassName="acpmux-location-search"
-          listClassName="acpmux-location-folders"
-          itemClassName="acpmux-menu-item"
-          renderItem={row}
-          autoHighlight
-          inline
-        />
-        {machineList &&
-          query.trim() !== "" &&
-          (list === "devices"
-            ? !devices.some((environment) => shownIds.has(environment.id))
-            : shown.length === 0 && savedShown.length === 0) && (
-            <div className="acpmux-location-empty">{t("composer.environmentNone")}</div>
-          )}
+          >
+            {cascade === "cloud" && (
+              <CascadeOptions
+                label={t("composer.cloud")}
+                focusIn={cascadeFocus}
+                onClose={closeCascade}
+                options={[
+                  {
+                    id: "auto",
+                    label: t("composer.cloudAuto"),
+                    detail: t("composer.cloudAutoDetail"),
+                    checked: cloudChecked,
+                    onSelect: () => submit(CLOUD_RUN),
+                  },
+                  ...(cloudOptions ?? []).map((option) => ({
+                    ...option,
+                    onSelect: () => {
+                      close();
+                      option.onSelect();
+                    },
+                  })),
+                ]}
+              />
+            )}
+            {cascade === "agents" && (
+              <>
+                <div className="acpmux-env-heading">{t("composer.agentMachines")}</div>
+                <Combobox
+                  suggestions={agentsGrouped.rows}
+                  onQuery={setAgentQuery}
+                  onSubmit={submit}
+                  onCancel={() => closeCascade(true)}
+                  cancelOnBlur={false}
+                  inputRef={agentField}
+                  onCommand={(event) => {
+                    if (event.key === "Tab") event.preventDefault();
+                  }}
+                  label={t("composer.environmentSearch")}
+                  placeholder={t("composer.environmentSearch")}
+                  inputClassName="acpmux-location-search"
+                  listClassName="acpmux-location-folders"
+                  itemClassName="acpmux-menu-item"
+                  renderItem={(value) => rowContent(value, agentsGrouped.count, true)}
+                  autoHighlight
+                  inline
+                />
+                {agentWords.length > 0 && agentsGrouped.rows.length === 0 && (
+                  <div className="acpmux-location-empty">{t("composer.environmentNone")}</div>
+                )}
+              </>
+            )}
+          </CascadeMenu>
+        )}
       </Popover>
     </span>
   );
@@ -1081,8 +1298,10 @@ const MOVE_TO = ACTION + "moveTo:";
 /// Move to…'s first row: where the chat runs now, checked. No target's value, which has an id after
 /// the colon, is this one.
 const MOVE_HERE = ACTION + "moveHere";
-/// A new chat's Other devices row, which opens the person's own machines.
-const DEVICES_MENU = ACTION + "otherDevices";
+/// A new chat's Agent machines row, which opens the machines agents run on beside the list.
+const AGENTS_MENU = ACTION + "agentMachines";
+/// The Agent machines cascade's own Unavailable row.
+const UNAVAILABLE_AGENTS = ACTION + "unavailableAgents";
 
 /// One place a started chat can move (Move to…): `local` is this Mac, whose row says This Mac.
 export interface MoveTarget {
