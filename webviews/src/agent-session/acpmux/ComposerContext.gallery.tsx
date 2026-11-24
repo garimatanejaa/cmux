@@ -463,13 +463,8 @@ const openRunToggle: Play = async (ctx) => {
   await ctx.click({ role: "button", name: /^Where should this chat run/ });
   await waitRows("run")(ctx);
 };
-/// Where > Other devices: the person's own machines open in the Where menu itself (Austin, 2026-11-12;
-/// it was Remote, which picked the first ready machine and opened the machine chip).
-const openWhereDevices: Play = async (ctx) => {
-  await openWhere(ctx);
-  await ctx.click({ selector: '.acpmux-env-popover [data-action="otherDevices"]' });
-  await ctx.waitFor(() => ctx.document.querySelector('.acpmux-env-popover.acpmux-env-devices [role="option"]'));
-};
+/// The person's own machines are inline in Where now (no Other devices drill-in): opening Where shows them.
+const openWhereDevices: Play = openWhere;
 type StripArm = "where-machine" | "where-machine-always" | "cloud-toggle" | "combined";
 const STRIP_NOTES: Record<StripArm, string> = {
   "where-machine":
@@ -604,71 +599,103 @@ const sleepVariants = {
   },
 };
 
-// Other devices (Austin, 2026-11-12, after another product's "Run on" menu: "Cloud ✓", "Other
-// devices 1 ›"): a new chat's one control lists This Mac, Cloud and Other devices, with the count of
-// the person's machines a chat can start on now; the row opens them in place, each with its online
-// dot and how it connects, the ones still connecting greyed, then Add Machine….
-const otherDevicesMachines = {
+// A new chat's place picker (Leo, 2026-11-23: "another chevron. just like how cloud goes to another
+// chevron"; "i cant click back" of the drill-in that replaced the list): This Mac, Cloud (a click is
+// auto; its chevron cascades), the person's own machines inline with their ⌥⌘ keys, and Agent machines
+// N › (a cascade with search, the main list staying open and clickable beside it). `peerInfo` is acpmux's
+// own/agent classification of each machine.
+const placeMachines = {
   ...stripMachines,
   stripLayout: "combined" as const,
-  peers: ["studio-mini", "gpu-box", "laptop", "Cloud machine"],
-  peerKinds: { "studio-mini": "ssh", "gpu-box": "ssh", laptop: "ssh", "Cloud machine": "cloud" } as Record<
-    string,
-    "ssh" | "cloud"
-  >,
-  peerConnected: { "studio-mini": true, "gpu-box": true, laptop: false, "Cloud machine": true },
+  peers: ["air-blue", "cmux16", "huge-blue", "big-red", "lane-1", "lane-2", "lane-3", "Cloud machine"],
+  peerKinds: {
+    "air-blue": "ssh",
+    cmux16: "ssh",
+    "huge-blue": "ssh",
+    "big-red": "ssh",
+    "lane-1": "ssh",
+    "lane-2": "ssh",
+    "lane-3": "ssh",
+    "Cloud machine": "cloud",
+  } as Record<string, "ssh" | "cloud">,
+  peerConnected: {
+    "air-blue": true,
+    cmux16: true,
+    "huge-blue": true,
+    "big-red": true,
+    "lane-1": true,
+    "lane-2": true,
+    "lane-3": false,
+    "Cloud machine": true,
+  },
   peerStates: {
-    "studio-mini": "connected",
-    "gpu-box": "connected",
-    laptop: "connecting",
+    "air-blue": "connected",
+    cmux16: "connected",
+    "huge-blue": "connected",
+    "big-red": "connected",
+    "lane-1": "connected",
+    "lane-2": "connected",
+    "lane-3": "connecting",
     "Cloud machine": "connected",
   },
+  peerInfo: {
+    "air-blue": { group: "own", liveSessions: 2 },
+    cmux16: { group: "own", liveSessions: 0 },
+    "huge-blue": { group: "own", liveSessions: 5 },
+    "big-red": { group: "own", liveSessions: 0 },
+    "lane-1": { group: "agent", liveSessions: 1 },
+    "lane-2": { group: "agent", liveSessions: 0 },
+    "lane-3": { group: "agent", liveSessions: 0 },
+  } as Record<string, { group: "own" | "agent"; liveSessions: number }>,
 };
-const openOtherDevices: Play = async (ctx) => {
-  await openCombined(ctx);
-  await ctx.click({ selector: '.acpmux-env-popover [data-action="otherDevices"]' });
-  await ctx.waitFor(() => ctx.document.querySelector('.acpmux-env-popover.acpmux-env-devices [role="option"]'));
-};
-const otherDevicesVariants = {
-  "other-devices-row": {
-    height: 260,
-    note: "A new chat's control open: This Mac, Cloud, then Other devices with 2 (studio-mini and gpu-box can take a chat; laptop is still connecting and the Cloud machine is Cloud's) and a chevron.",
-    props: otherDevicesMachines,
+const openCascade =
+  (kind: "cloud" | "agents"): Play =>
+  async (ctx) => {
+    await openCombined(ctx);
+    const row = ctx.document.querySelector<HTMLElement>(`.acpmux-env-popover [data-cascade="${kind}"]`);
+    if (!row) throw new Error(`no ${kind} row to open`);
+    row.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    await ctx.waitFor(() => ctx.document.querySelector(`.acpmux-env-cascade`));
+  };
+const placeVariants = {
+  "place-inline": {
+    height: 300,
+    note: "Shipped list, closed cascades: This Mac, Cloud (chevron), the person's own machines inline with their ⌥⌘ keys, Agent machines N › last. N counts reachable machines only; no 'SSH' subtitle (a machine shows 'N live' or nothing).",
+    props: placeMachines,
     play: openCombined,
   },
-  "other-devices-list": {
-    height: 320,
-    note: "Other devices open: its heading, the ready machines first with a green dot and SSH under the name, laptop greyed saying it is connecting, Add Machine… last. No Cloud machine.",
-    props: otherDevicesMachines,
-    play: openOtherDevices,
+  "place-cascade-agents": {
+    height: 340,
+    note: "SHIPPED. Agent machines cascade: opens beside the main list, which stays open and clickable (this is what 'back' is: move the mouse back, or press ←; Esc and a click outside close). Search at the top; typing in the main list filters across levels.",
+    props: placeMachines,
+    play: openCascade("agents"),
   },
-  "other-devices-picked": {
+  "place-cascade-cloud": {
+    height: 340,
+    note: "SHIPPED. Cloud's cascade: Auto (default, checked), each cloud served, Hybrid start (a slot for cmux#53288). A click on the Cloud row itself means Auto.",
+    props: placeMachines,
+    play: openCascade("cloud"),
+  },
+  "place-none-agent": {
     height: 260,
-    note: "gpu-box picked from Other devices: the main list keeps it checked after This Mac, Other devices still offered.",
-    props: { ...otherDevicesMachines, ...onMachine("gpu-box") },
+    note: "No agent machines: the Agent machines row is not offered; own machines inline, Add Machine… last.",
+    props: { ...placeMachines, peers: ["air-blue", "cmux16"], peerInfo: { "air-blue": { group: "own", liveSessions: 0 }, cmux16: { group: "own", liveSessions: 0 } } },
     play: openCombined,
   },
-  "where-other-devices-list": {
-    height: 320,
-    note: "The shipped strip's Where menu, Other devices open: studio-mini and gpu-box ready with the green dot and SSH under the name, laptop greyed saying it is connecting, Add Machine… last; no Cloud machine.",
-    props: { ...otherDevicesMachines, stripLayout: "where-machine" as const },
-    play: openWhereDevices,
-  },
-  "where-other-devices-picked": {
-    height: 260,
-    note: "gpu-box picked there: Where reads Other devices and checks that row (with its count and chevron, so it still opens the list); the machine chip beside it names gpu-box and changes it as before.",
-    props: { ...otherDevicesMachines, stripLayout: "where-machine" as const, ...onMachine("gpu-box") },
-    play: openWhere,
-  },
-  "other-devices-none": {
-    height: 260,
-    note: "No machine of the person's yet: Other devices still shows, with no count, and opens just Add Machine….",
-    props: {
-      ...otherDevicesMachines,
-      peers: ["Cloud machine"],
-      peerKinds: { "Cloud machine": "cloud" } as Record<string, "ssh" | "cloud">,
+  "place-comparison-drill-in": {
+    height: 300,
+    note: "COMPARISON ONLY, not shipped: the old drill-in. Agent machines would replace the list with a '‹ Back' header and the machines; Leo: 'this is bad behaviour. i cant click back.' Drawn as a static mock beside the shipped cascade.",
+    props: placeMachines,
+    play: async (ctx: Parameters<Play>[0]) => {
+      await openCombined(ctx);
+      const popover = ctx.document.querySelector<HTMLElement>(".acpmux-env-popover");
+      if (!popover) return;
+      const mock = ctx.document.createElement("div");
+      mock.className = "acpmux-env-popover-mock";
+      mock.setAttribute("style", "padding:8px;font:12px system-ui;opacity:.8");
+      mock.textContent = "‹ Back   Agent machines 47   (list replaced; the main menu is gone)";
+      popover.prepend(mock);
     },
-    play: openOtherDevices,
   },
 };
 
@@ -1152,7 +1179,7 @@ export default componentEntry<ComponentProps<typeof ComposerContext>>({
     ...stripVariants("where-machine-always"),
     ...stripVariants("cloud-toggle"),
     ...stripVariants("combined"),
-    ...otherDevicesVariants,
+    ...placeVariants,
     // One Cloud row, whatever the account state: Cloud while signed in or before the app's Cloud
     // reply, Sign in for Cloud in its place once the app said signed out (never both).
     "strip-where-signed-out": {
