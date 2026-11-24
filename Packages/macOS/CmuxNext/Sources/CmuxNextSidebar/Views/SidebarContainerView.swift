@@ -401,6 +401,9 @@ public final class SidebarContainerView: NSView {
         setClipReach(paneReach, collapsed: isPanelCollapsed, animated: false)
         SidebarHiddenState.apply(isPanelCollapsed, to: panel)
         panel.alphaValue = 1
+        // A restore can change the float look, and with it the reach: remount so the band and the
+        // scroller clearance follow in this turn, not the observation's next one.
+        if paneReach != mountedPaneReach || resizeBand != mountedBand { mountHandle() }
         syncHandleVisibility()
         syncRail()
         // A layout callback can start a newer width animation; that one owns the motion flag.

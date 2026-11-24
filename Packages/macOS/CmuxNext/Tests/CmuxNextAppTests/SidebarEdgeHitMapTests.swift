@@ -141,12 +141,14 @@ import Testing
     /// every band point a resize level with the shown knob, and the scroller's grab strip clear of it.
     @Test(arguments: Density.allCases, SidebarDensity.allCases)
     func theBandWinsOverTheScrollerAtEveryDensity(density: Density, sidebarDensity: SidebarDensity) throws {
-        let savedDensity = DesignSettings.shared.density
+        let savedTokens = DesignSettings.shared.densityTokens
+        let savedFromThemeFile = DesignSettings.shared.densityFromThemeFile
         let savedSidebar = DesignSettings.shared.sidebarSections.density
         DesignSettings.shared.density = density
         DesignSettings.shared.sidebarSections.density = sidebarDensity
         defer {
-            DesignSettings.shared.density = savedDensity
+            DesignSettings.shared.densityTokens = savedTokens
+            DesignSettings.shared.densityFromThemeFile = savedFromThemeFile
             DesignSettings.shared.sidebarSections.density = savedSidebar
         }
         let f = try Self.fixture()
