@@ -230,3 +230,41 @@ fn shortened_timing_drives_the_same_policy() {
     assert_eq!(decide_with(Some(start), at(200), &gone, timing), Decision::Exit);
     assert_eq!(decide_with(Some(start), at(10_000), &live, timing), Decision::Wait(timing.recheck));
 }
+
+#[test]
+fn a_closed_app_is_proven_only_after_it_answered_and_then_refused_for_the_delay() {
+    let t0 = Instant::now();
+    let delay = ORPHAN_EXIT_DELAY;
+    // Live tag: socket answers, never closed.
+    let (answered, since) = observe_app(false, None, true, t0);
+    assert!(!app_closed(answered, since, t0 + 10 * delay, delay));
+    // Refusing, within the delay: kept.
+    let (answered, since) = observe_app(answered, since, false, t0 + MINUTE);
+    assert!(!app_closed(answered, since, t0 + MINUTE + delay - Duration::from_secs(1), delay));
+    // Refusing for the whole delay: closed.
+    assert!(app_closed(answered, since, t0 + MINUTE + delay, delay));
+    // An answer in between restarts the run.
+    let (answered, since) = observe_app(answered, since, true, t0 + 30 * MINUTE);
+    assert_eq!(since, None);
+    assert!(!app_closed(answered, since, t0 + 10 * delay, delay));
+    // Never answered (socket control off, never started): kept.
+    let (answered, since) = observe_app(false, None, false, t0);
+    assert!(!app_closed(answered, since, t0 + 10 * delay, delay));
+}
+
+#[test]
+fn a_closed_app_orphans_an_owner_with_live_terminals() {
+    struct Closed(FakeFacts);
+    impl OrphanFacts for Closed {
+        fn clients(&self) -> usize { 0 }
+        fn executable_present(&self) -> bool { self.0.executable_present() }
+        fn live_terminals(&self) -> Option<usize> { self.0.live_terminals() }
+        fn app_closed(&self) -> bool { true }
+    }
+    let start = Instant::now();
+    let closed = Closed(facts(false, 3));
+    assert_eq!(decide(Some(start), start + 59 * MINUTE, &closed), Decision::Wait(MINUTE));
+    assert_eq!(decide(Some(start), start + 60 * MINUTE, &closed), Decision::Exit);
+    // The default fact (no socket to probe) never closes an app.
+    assert!(!facts(false, 3).app_closed());
+}
