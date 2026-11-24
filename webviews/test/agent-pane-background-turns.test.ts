@@ -314,6 +314,7 @@ test("a subagent's done line folds with its quiet background turn", async () => 
     const tray = withSubagentLines(rows(), cache);
     const done = tray.find((row) => row.kind === SUBAGENT_DONE)!;
     expect(done.inBackground).toBe("bg9");
+    console.log("PROBE1", JSON.stringify(drawn([...tray], [backgroundTurnRowId("bg9")]).map((r) => [r.id, r.kind, r.backgroundRun?.rows])));
     expect(drawn([...tray]).some((row) => row.kind === SUBAGENT_DONE)).toBe(false);
     expect(drawn([...tray], [backgroundTurnRowId("bg9")]).some((row) => row.kind === SUBAGENT_DONE)).toBe(true);
   } finally {
@@ -1125,6 +1126,7 @@ test("a background turn's long reply is the agent's own turn, never the subagent
     // The subagent's line keeps none of the chat's words, the short note included.
     expect(agent?.reaction).not.toHaveProperty("text");
     const view = drawn([...withSubagentLines(rows(), new Map())]);
+    console.log("PROBE2", JSON.stringify(view.map((r) => [r.id, r.kind, r.inBackground, r.backgroundRun?.rows])));
     expect(view.some((row) => row.kind === BACKGROUND_TURN)).toBe(false);
     const own = view.flatMap((row, at) =>
       row.kind === "assistant" && row.inBackground?.startsWith("bg-") ? [{ row, at }] : [],
