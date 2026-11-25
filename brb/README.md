@@ -4,7 +4,9 @@ BRB. Your agents keep going.
 
 BRB lets your phone watch and control coding agents (Claude Code, Codex) that run in cmux panes on your Mac. Everything is free to run: Tailscale free tier for the network, ntfy.sh for push notifications later, no paid Apple developer account.
 
-Status: R1 only. This folder holds the Mac-side relay (`brb/relay`). The phone app and notifications come later.
+Status: relay with pairing, scopes and ntfy notifications (`relay/`), a TypeScript client (`protocol/`), and an Expo phone app (`app/`). Written but not yet tested on a phone. See `docs/r3-r5-notes.md`.
+
+Run the app: `docs/app-setup.md`.
 
 ## Build and test (on the Mac)
 
@@ -27,5 +29,11 @@ Manage phones:
     brb-relay devices set-scope <id> read|control
     brb-relay devices revoke <id>
     brb-relay devices revoke-all
+
+Notifications (free, via ntfy):
+
+    brb-relay push setup        # prints your private topic; subscribe to it in the ntfy phone app
+    brb-relay push test
+    brb-relay push disable
 
 Data lives in `~/.brb` (override with `BRB_HOME`). See `docs/security.md`.

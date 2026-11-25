@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "BRB",
+    "slug": "brb",
+    "version": "0.1.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": { "image": "./assets/splash-icon.png", "resizeMode": "contain", "backgroundColor": "#0b0d10" },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "dev.brb.app",
+      "infoPlist": {
+        "NSAppTransportSecurity": { "NSAllowsArbitraryLoads": true },
+        "NSLocalNetworkUsageDescription": "BRB connects to your Mac to show your coding agents."
+      }
+    },
+    "android": {
+      "package": "dev.brb.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#0b0d10",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "plugins": [
+      "expo-secure-store",
+      ["expo-build-properties", { "android": { "usesCleartextTraffic": true } }]
+    ]
+  }
+}

@@ -72,6 +72,15 @@ final class CmuxRelayTests: XCTestCase {
         XCTAssertTrue(try CmuxRelay.parseAsRoot(["devices", "revoke-all"]) is Devices.RevokeAll)
     }
 
+    func testPushSubcommandsParse() throws {
+        XCTAssertTrue(try CmuxRelay.parseAsRoot(["push", "setup"]) is Push.Setup)
+        let setup = try XCTUnwrap(try CmuxRelay.parseAsRoot(["push", "setup", "--include-text", "--server", "https://n.example"]) as? Push.Setup)
+        XCTAssertTrue(setup.includeText)
+        XCTAssertEqual(setup.server, "https://n.example")
+        XCTAssertTrue(try CmuxRelay.parseAsRoot(["push", "test"]) is Push.Test)
+        XCTAssertTrue(try CmuxRelay.parseAsRoot(["push", "disable"]) is Push.Disable)
+    }
+
     func testCommandNameIsBrbRelay() {
         XCTAssertEqual(CmuxRelay.configuration.commandName, "brb-relay")
     }

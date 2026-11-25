@@ -30,3 +30,9 @@ What the relay does, and what it does not.
 - Control scope can run any cmux method that is not on the never list. A control device is as powerful as a person at the keyboard. Pair read-only unless you need control.
 - Revoking a device closes its connection on its next request, not instantly.
 - Per-device bad-token lockout is not implemented; lockout is per address.
+
+## Push notifications (R2)
+- `brb-relay push setup` creates a private ntfy topic (130 random bits) in `~/.brb/ntfy.json` (0600). Anyone who knows the topic address can read its messages, so treat it like a password.
+- By default a notification only says "An agent needs your attention." Terminal text is sent only if you pass `--include-text`; then ntfy.sh and the phone vendor's push service can see it.
+- Use your own ntfy server and an access token for stronger privacy (`--server`, token in `ntfy.json`).
+- `brb-relay push disable` turns it off.

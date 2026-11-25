@@ -51,6 +51,7 @@ public actor Routes {
     let registrationPeerResolver: RegistrationPeerResolver
     let allowLocalhost: Bool
     private let pairing: PairingGate?
+    private let ntfySettings: (@Sendable () -> NtfySettings?)?
     private let logger = Logger(label: "brb-relay.registration")
 
     public init(
@@ -61,9 +62,11 @@ public actor Routes {
         allowLocalhost: Bool = Routes.defaultAllowLocalhost(),
         clock: any Clock = SystemClock(),
         selfLoginCacheDuration: TimeInterval = 5,
-        pairing: PairingGate? = nil
+        pairing: PairingGate? = nil,
+        ntfySettings: (@Sendable () -> NtfySettings?)? = nil
     ) {
         self.pairing = pairing
+        self.ntfySettings = ntfySettings
         self.deviceStore = deviceStore
         self.config = config
         self.auth = auth
@@ -90,9 +93,11 @@ public actor Routes {
         allowLocalhost: Bool = Routes.defaultAllowLocalhost(),
         clock: any Clock = SystemClock(),
         selfLoginCacheDuration: TimeInterval = 5,
-        pairing: PairingGate? = nil
+        pairing: PairingGate? = nil,
+        ntfySettings: (@Sendable () -> NtfySettings?)? = nil
     ) {
         self.pairing = pairing
+        self.ntfySettings = ntfySettings
         self.deviceStore = deviceStore
         self.config = { config }
         self.auth = auth
@@ -155,6 +160,12 @@ public actor Routes {
             }
             return deviceStatus(device)
 
+        case (.GET, "/v1/push"):
+            guard let did = deviceId, deviceStore.lookup(deviceId: did) != nil else {
+                return .init(.unauthorized)
+            }
+            return pushInfo()
+
         case (.POST, "/v1/devices/me/apns"):
             guard let did = deviceId,
                   deviceStore.lookup(deviceId: did) != nil else {
@@ -182,13 +193,45 @@ public actor Routes {
     private func deviceStatus(_ device: Device) -> HTTPResponseLite {
         struct Response: Encodable {
             let deviceId: String
-            enum CodingKeys: String, CodingKey { case deviceId = "device_id" }
+            let scope: String
+            enum CodingKeys: String, CodingKey { case deviceId = "device_id", scope }
         }
         do {
-            let body = try JSONEncoder().encode(Response(deviceId: device.deviceId))
+            let body = try JSONEncoder().encode(
+                Response(deviceId: device.deviceId, scope: device.effectiveScope.rawValue)
+            )
             return .init(
                 .ok,
                 body: body,
+                headers: [("Content-Type", "application/json")]
+            )
+        } catch {
+            return .init(.internalServerError)
+        }
+    }
+
+    // MARK: - GET /v1/push
+
+    /// Tells a paired phone where to subscribe for ntfy notifications.
+    private func pushInfo() -> HTTPResponseLite {
+        struct Response: Encodable {
+            let enabled: Bool
+            let subscribeUrl: String?
+            let includeText: Bool
+            enum CodingKeys: String, CodingKey {
+                case enabled, subscribeUrl = "subscribe_url", includeText = "include_text"
+            }
+        }
+        let current = ntfySettings?()
+        let response = Response(
+            enabled: current?.enabled ?? false,
+            subscribeUrl: (current?.enabled ?? false) ? current?.subscribeURL : nil,
+            includeText: current?.includeText ?? false
+        )
+        do {
+            return .init(
+                .ok,
+                body: try JSONEncoder().encode(response),
                 headers: [("Content-Type", "application/json")]
             )
         } catch {

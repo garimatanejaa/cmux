@@ -22,7 +22,7 @@ struct CmuxRelay: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "brb-relay",
         version: CmuxRemoteVersion.marketing,
-        subcommands: [Serve.self, Pair.self, Devices.self],
+        subcommands: [Serve.self, Pair.self, Devices.self, Push.self],
         defaultSubcommand: Serve.self
     )
 }
@@ -68,6 +68,7 @@ struct Serve: AsyncParsableCommand {
             )
         )
         let auditLog = AuditLog(url: URL(fileURLWithPath: auditLogPath()))
+        let ntfySettings = NtfySettingsStore(url: URL(fileURLWithPath: ntfySettingsPath()))
         let apnsProvider = APNsProviderClient(config: { store.current.apns })
         let apnsFanout = InboxPushFanout(
             deviceStore: deviceStore,
@@ -78,10 +79,18 @@ struct Serve: AsyncParsableCommand {
             dispatch: { method, params in try await facade.dispatch(method: method, params: params) },
             log: { line in logger.info("\(line)") }
         )
+        let ntfyFanout = NtfyFanout(
+            settings: { ntfySettings.load() },
+            transport: APNsHTTPTransport(),
+            log: { line in logger.warning("\(line)") }
+        )
         let notificationPipeline = NotificationEventPipeline(
             enrich: { await enricher.fill($0) },
             broadcast: { await manager.broadcastToAll(frame: $0) },
-            push: { await apnsFanout.deliver(event: $0) }
+            push: {
+                await apnsFanout.deliver(event: $0)
+                await ntfyFanout.deliver(event: $0)
+            }
         )
         conn.onReset = {
             Task { await manager.broadcastReset() }
@@ -127,7 +136,8 @@ struct Serve: AsyncParsableCommand {
             config: { store.current },
             auth: auth,
             allowSelfLogin: allowSelfLogin,
-            pairing: pairingGate
+            pairing: pairingGate,
+            ntfySettings: { ntfySettings.load() }
         )
         let uploadRoot = ProcessInfo.processInfo.environment["CMUX_RELAY_UPLOAD_ROOT"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
@@ -343,6 +353,7 @@ func devicesStorePath() -> String { "\(brbHome())/devices.json" }
 func pairingCodePath() -> String { "\(brbHome())/pairing.json" }
 func lockoutsPath() -> String { "\(brbHome())/lockouts.json" }
 func auditLogPath() -> String { "\(brbHome())/audit.log" }
+func ntfySettingsPath() -> String { "\(brbHome())/ntfy.json" }
 
 /// Split `RelayConfig.listen` ("host:port") into a host + port pair.
 /// Falls back to 4399 if the port is missing or unparseable so a typo
@@ -352,4 +363,85 @@ func parseListen(_ listen: String) -> (host: String, port: Int) {
     let host = parts.first ?? "0.0.0.0"
     let port = parts.count >= 2 ? (Int(parts[1]) ?? 4399) : 4399
     return (host, port)
+}
+
+
+struct Push: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "push",
+        abstract: "Phone notifications through ntfy.",
+        subcommands: [Setup.self, Test.self, Disable.self]
+    )
+
+    struct Setup: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "setup",
+            abstract: "Create (or show) your private ntfy topic and how to subscribe to it."
+        )
+
+        @Option(name: .customLong("server"), help: "ntfy server. Default https://ntfy.sh")
+        var server: String?
+
+        @Flag(name: .customLong("include-text"),
+              help: "Send the real notification text. Off by default: the ntfy server and the phone vendor's push service would see it.")
+        var includeText = false
+
+        func run() throws {
+            let store = NtfySettingsStore(url: URL(fileURLWithPath: ntfySettingsPath()))
+            var settings = try store.ensure()
+            if let server { settings.server = server }
+            if includeText { settings.includeText = true }
+            settings.enabled = true
+            try store.save(settings)
+            print("Notifications are on.")
+            print("Install the ntfy app on your phone and subscribe to this topic:")
+            print("  \(settings.subscribeURL)")
+            print("Anyone who knows that address can read your notifications. Keep it private.")
+            print(settings.includeText
+                  ? "Notification text: sent as written."
+                  : "Notification text: hidden (you only see \"An agent needs your attention\"). Use --include-text to change.")
+            print("Send a test with: brb-relay push test")
+        }
+    }
+
+    struct Test: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "test", abstract: "Send a test notification."
+        )
+
+        func run() async throws {
+            let store = NtfySettingsStore(url: URL(fileURLWithPath: ntfySettingsPath()))
+            guard let settings = store.load(), settings.enabled else {
+                print("Notifications are off. Run: brb-relay push setup")
+                throw ExitCode.failure
+            }
+            guard let status = await NtfyFanout.sendTest(settings: settings, transport: APNsHTTPTransport()) else {
+                print("Could not reach \(settings.server).")
+                throw ExitCode.failure
+            }
+            if (200..<300).contains(status) {
+                print("Sent. Your phone should show it within a few seconds.")
+            } else {
+                print("The server answered HTTP \(status).")
+                throw ExitCode.failure
+            }
+        }
+    }
+
+    struct Disable: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "disable", abstract: "Turn phone notifications off."
+        )
+
+        func run() throws {
+            let store = NtfySettingsStore(url: URL(fileURLWithPath: ntfySettingsPath()))
+            guard var settings = store.load() else {
+                print("Notifications were never set up.")
+                return
+            }
+            settings.enabled = false
+            try store.save(settings)
+            print("Notifications are off. Your topic is kept; run \"brb-relay push setup\" to turn them back on.")
+        }
+    }
 }
