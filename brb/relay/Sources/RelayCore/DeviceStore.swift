@@ -1,0 +1,259 @@
+import Crypto
+import Darwin
+import Foundation
+import Security
+
+/// Persisted device registration. The bearer itself never reaches disk.
+public struct Device: Codable, Equatable, Sendable {
+    public var deviceId: String
+    public var loginName: String
+    public var hostname: String
+    public var registeredAt: Int64
+    public var tokenHash: String
+    public var apnsToken: String?
+    public var apnsEnv: String?
+    /// Tailscale stable node ID seen at registration (or backfilled on the
+    /// first node-key match). Absent for records written before it existed.
+    public var stableId: String?
+    /// What this phone may do. Records without it (older files) count as read-only.
+    public var scope: DeviceScope? = nil
+
+    /// The scope the relay enforces: `read` unless the record says `control`.
+    public var effectiveScope: DeviceScope { scope ?? .read }
+
+    enum CodingKeys: String, CodingKey {
+        case deviceId = "device_id"
+        case loginName = "login_name"
+        case hostname
+        case registeredAt = "registered_at"
+        case tokenHash = "token_hash"
+        case apnsToken = "apns_token"
+        case apnsEnv = "apns_env"
+        case stableId = "stable_id"
+        case scope
+    }
+}
+
+/// Atomic on-disk device registry. Mutations persist a candidate snapshot
+/// before publishing it in memory, so a disk error cannot leave the process
+/// accepting credentials that disappear after restart.
+public final class DeviceStore: @unchecked Sendable {
+    public typealias Persist = @Sendable ([String: Device], URL) throws -> Void
+
+    public let url: URL
+    private var devices: [String: Device]
+    private let persistSnapshot: Persist
+    private let queue = DispatchQueue(label: "DeviceStore")
+
+    public convenience init(url: URL) throws {
+        try self.init(url: url) { devices, destination in
+            try Self.persistToDisk(devices, destination)
+        }
+    }
+
+    public init(url: URL, persist: @escaping Persist) throws {
+        self.url = url
+        persistSnapshot = persist
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: url.path) {
+            let data = try Data(contentsOf: url)
+            do {
+                devices = try JSONDecoder().decode([String: Device].self, from: data)
+            } catch {
+                throw DeviceStoreError.invalidState(url.path)
+            }
+        } else {
+            devices = [:]
+            try persistSnapshot(devices, url)
+        }
+    }
+
+    public func lookup(deviceId: String) -> Device? {
+        queue.sync { devices[deviceId] }
+    }
+
+    public func allDevices() -> [Device] {
+        queue.sync { Array(devices.values) }
+    }
+
+    public func register(
+        deviceId: String,
+        loginName: String,
+        hostname: String,
+        apnsToken: String?,
+        stableId: String? = nil,
+        scope: DeviceScope = .read
+    ) throws -> String {
+        let token = try randomToken()
+        let device = Device(
+            deviceId: deviceId,
+            loginName: loginName,
+            hostname: hostname,
+            registeredAt: Int64(Date().timeIntervalSince1970),
+            tokenHash: hash(token),
+            apnsToken: apnsToken,
+            apnsEnv: nil,
+            stableId: stableId,
+            scope: scope
+        )
+        try mutate { devices in
+            // A node that re-pairs after a key rotation replaces its own
+            // record instead of leaving a stale one behind.
+            if let stableId {
+                for (id, existing) in devices where id != deviceId && existing.stableId == stableId {
+                    devices.removeValue(forKey: id)
+                }
+            }
+            devices[deviceId] = device
+        }
+        return token
+    }
+
+    /// Records the stable node ID for a device whose bearer was just
+    /// confirmed by a node-key match. No-op once a stable ID is stored.
+    public func bindStableId(deviceId: String, stableId: String) throws {
+        try mutate { devices in
+            guard var device = devices[deviceId], device.stableId == nil else { return }
+            device.stableId = stableId
+            devices[deviceId] = device
+        }
+    }
+
+    public func validate(deviceId: String, token: String) -> Bool {
+        guard let device = lookup(deviceId: deviceId) else { return false }
+        return constantTimeEqual(device.tokenHash, hash(token))
+    }
+
+    public func device(matching token: String) -> Device? {
+        queue.sync {
+            devices.values.first { constantTimeEqual($0.tokenHash, hash(token)) }
+        }
+    }
+
+    public func revoke(deviceId: String) throws {
+        try mutate { $0.removeValue(forKey: deviceId) }
+    }
+
+    /// Removes every paired device. Returns how many were removed.
+    @discardableResult
+    public func revokeAll() throws -> Int {
+        var count = 0
+        try mutate { devices in
+            count = devices.count
+            devices.removeAll()
+        }
+        return count
+    }
+
+    /// Changes what a paired device may do. Throws `unknownDevice` for an unknown id.
+    public func setScope(deviceId: String, scope: DeviceScope) throws {
+        try mutate { devices in
+            guard var device = devices[deviceId] else {
+                throw RelayError.unknownDevice(deviceId)
+            }
+            device.scope = scope
+            devices[deviceId] = device
+        }
+    }
+
+    /// The scope for a paired device, or nil when the device is not (or no longer) paired.
+    public func scope(of deviceId: String) -> DeviceScope? {
+        lookup(deviceId: deviceId)?.effectiveScope
+    }
+
+    /// Finds a device by full id or by a unique prefix of it, for the command line.
+    public func resolve(idOrPrefix: String) -> Device? {
+        queue.sync {
+            if let exact = devices[idOrPrefix] { return exact }
+            let matches = devices.values.filter { $0.deviceId.hasPrefix(idOrPrefix) }
+            return matches.count == 1 ? matches.first : nil
+        }
+    }
+
+    public func setAPNsToken(deviceId: String, token: String, env: String) throws {
+        try mutate { candidate in
+            guard var device = candidate[deviceId] else {
+                throw RelayError.unknownDevice(deviceId)
+            }
+            device.apnsToken = token
+            device.apnsEnv = env
+            candidate[deviceId] = device
+        }
+    }
+
+    public func clearAPNsToken(deviceId: String) throws {
+        try mutate { candidate in
+            guard var device = candidate[deviceId] else { return }
+            device.apnsToken = nil
+            device.apnsEnv = nil
+            candidate[deviceId] = device
+        }
+    }
+
+    private func mutate(_ body: (inout [String: Device]) throws -> Void) throws {
+        try queue.sync {
+            var candidate = devices
+            try body(&candidate)
+            try persistSnapshot(candidate, url)
+            devices = candidate
+        }
+    }
+
+    public static func persistToDisk(
+        _ devices: [String: Device],
+        _ url: URL
+    ) throws {
+        let fileManager = FileManager.default
+        let directory = url.deletingLastPathComponent()
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let temporary = directory.appendingPathComponent(".devices-\(UUID().uuidString).tmp")
+        defer { try? fileManager.removeItem(at: temporary) }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(devices).write(to: temporary)
+        try fileManager.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: temporary.path
+        )
+        guard rename(temporary.path, url.path) == 0 else {
+            throw DeviceStoreError.persistence(errno)
+        }
+    }
+
+    private func randomToken() throws -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let status = bytes.withUnsafeMutableBufferPointer {
+            SecRandomCopyBytes(kSecRandomDefault, $0.count, $0.baseAddress!)
+        }
+        guard status == errSecSuccess else {
+            throw DeviceStoreError.secureRandom(status)
+        }
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func hash(_ raw: String) -> String {
+        SHA256.hash(data: Data(raw.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func constantTimeEqual(_ a: String, _ b: String) -> Bool {
+        guard a.count == b.count else { return false }
+        var difference: UInt8 = 0
+        for (left, right) in zip(a.utf8, b.utf8) { difference |= left ^ right }
+        return difference == 0
+    }
+}
+
+public enum DeviceStoreError: Error, Equatable {
+    case invalidState(String)
+    case persistence(Int32)
+    case secureRandom(OSStatus)
+}
+
+public enum RelayError: Error, Equatable {
+    case unknownDevice(String)
+    case unauthorized(String)
+    case rateLimited
+    case socketUnavailable
+    case bootIdMismatch
+}

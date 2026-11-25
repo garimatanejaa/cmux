@@ -1,0 +1,1070 @@
+import Foundation
+import NIOCore
+import NIOWebSocket
+@_spi(RelayServer) import RelayCore
+import SharedKit
+import Logging
+
+// MARK: - CMUX dispatch facade
+
+/// Indirection so the WS handler can be wired against either the real
+/// `CMUXClient` (M3.11) or a recording / throwing test double. The facade
+/// owns "one round-trip RPC against the cmux daemon" — fan-out for events
+/// is handled by EventStream + SessionManager.broadcastToAll.
+public protocol CMUXFacade: Sendable {
+    func dispatch(method: String, params: JSONValue) async throws -> JSONValue
+}
+
+// MARK: - Pure protocol machine
+
+/// Pure WS protocol logic — Hello detection + RPC dispatch — separated
+/// from the NIO channel so it can be unit-tested without an event loop.
+/// The handler below applies the actions back onto the channel.
+///
+/// Plan task 10's tests used `EmbeddedChannel`, but the channel-bound
+/// pattern hits the same `Task` drain deadlock we resolved for the
+/// CMUXClient baseline tests. Splitting protocol-from-pipeline keeps
+/// the unit suite fast and deterministic; the NIO glue is exercised
+/// in M3.11's HTTPServer fixture and the M3.13 live smoke.
+/// Checks every phone request against the device's scope before anything runs,
+/// and writes control actions to the audit log. `scopeFor` returns nil once the
+/// device has been revoked, which closes the connection on its next request.
+public struct ScopeEnforcer: Sendable {
+    let deviceId: String
+    let scopeFor: @Sendable () -> DeviceScope?
+    let audit: AuditLog?
+
+    public init(deviceId: String, scopeFor: @escaping @Sendable () -> DeviceScope?, audit: AuditLog?) {
+        self.deviceId = deviceId
+        self.scopeFor = scopeFor
+        self.audit = audit
+    }
+}
+
+public actor WSProtocolMachine {
+    public enum Action: Equatable, Sendable {
+        case sendText(String)
+        case close
+        case attachSession(deviceId: String)
+        case subscribe(responseId: String, workspaceId: String, surfaceId: String, lines: Int)
+        case unsubscribe(responseId: String, surfaceId: String)
+        /// Requests a hub-backed `screen.full` without another terminal source read.
+        case requestFull(responseId: String, surfaceId: String)
+        case noteUserInput(surfaceId: String)
+    }
+
+    private let cmux: CMUXFacade
+    private let authenticatedDeviceID: String
+    private let uploadService: ChunkedFileUploadService
+    private let artifactService: TerminalArtifactService
+    private let browserCaptureService: BrowserCaptureService
+    private let feedService: FeedService
+    private let claudeTranscriptService: ClaudeTranscriptService
+    private let relayUpdateService: RelayUpdateService
+    private let scopeEnforcer: ScopeEnforcer?
+    private let uploadIDSource: @Sendable () -> UUID
+    private let relayOwnedTimeout: Duration
+    private var helloed = false
+
+    public init(cmux: CMUXFacade, scopeEnforcer: ScopeEnforcer? = nil) {
+        self.cmux = cmux
+        self.authenticatedDeviceID = ""
+        self.uploadService = ChunkedFileUploadService()
+        self.artifactService = TerminalArtifactService(
+            dispatchNative: { method, params in
+                await Self.dispatchNative(cmux: cmux, method: method, params: params)
+            }
+        )
+        self.browserCaptureService = BrowserCaptureService(cmux: cmux)
+        self.feedService = FeedService(cmux: cmux)
+        self.claudeTranscriptService = ClaudeTranscriptService(cmux: cmux)
+        self.relayUpdateService = .unavailable()
+        self.scopeEnforcer = scopeEnforcer
+        self.uploadIDSource = { UUID() }
+        self.relayOwnedTimeout = BoundedRelayWork.defaultTimeout
+    }
+
+    init(
+        cmux: CMUXFacade,
+        authenticatedDeviceID: String,
+        uploadService: ChunkedFileUploadService,
+        artifactService: TerminalArtifactService,
+        browserCaptureService: BrowserCaptureService? = nil,
+        feedService: FeedService? = nil,
+        claudeTranscriptService: ClaudeTranscriptService? = nil,
+        relayUpdateService: RelayUpdateService? = nil,
+        scopeEnforcer: ScopeEnforcer? = nil,
+        uploadIDSource: @escaping @Sendable () -> UUID = { UUID() },
+        relayOwnedTimeout: Duration = BoundedRelayWork.defaultTimeout
+    ) {
+        self.cmux = cmux
+        self.authenticatedDeviceID = authenticatedDeviceID
+        self.uploadService = uploadService
+        self.artifactService = artifactService
+        self.browserCaptureService = browserCaptureService ?? BrowserCaptureService(cmux: cmux)
+        self.feedService = feedService ?? FeedService(cmux: cmux)
+        self.claudeTranscriptService = claudeTranscriptService ?? ClaudeTranscriptService(cmux: cmux)
+        self.relayUpdateService = relayUpdateService ?? .unavailable()
+        self.scopeEnforcer = scopeEnforcer
+        self.uploadIDSource = uploadIDSource
+        self.relayOwnedTimeout = relayOwnedTimeout
+    }
+
+    public var hasHelloed: Bool { helloed }
+
+    /// Drive the machine with one inbound text frame. Returns the actions
+    /// the handler should apply to the channel (in order).
+    public func processText(_ text: String) async -> [Action] {
+        let data = Data(text.utf8)
+        if !helloed {
+            guard let hello = try? JSONDecoder().decode(HelloFrame.self, from: data) else {
+                return [.close]
+            }
+            helloed = true
+            return [.attachSession(deviceId: hello.deviceId)]
+        }
+
+        guard let req = try? JSONDecoder().decode(RPCRequest.self, from: data) else {
+            return []
+        }
+        if let denial = authorize(req) { return denial }
+        if let immediate = Self.synchronousRelayOwnedResponse(for: req) {
+            return [.sendText(immediate)]
+        }
+        if req.method == "file.upload" {
+            return [.sendText(await bounded(req) {
+                await BoundedRelayWork.offCooperativePool { Self.legacyUploadResponse(for: req) }
+            })]
+        }
+        if let response = await relayOwnedResponse(for: req) {
+            return [.sendText(response)]
+        }
+        if let relayAction = Self.relayOwnedAction(for: req) {
+            return [relayAction]
+        }
+
+        do {
+            let result = try await cmux.dispatch(
+                method: req.method,
+                params: Self.daemonCompatibleParams(for: req)
+            )
+            let resp = RPCResponse(id: req.id, ok: true, result: result, error: nil)
+            var actions: [Action] = [.sendText(Self.encode(resp))]
+            if Self.isSuccessfulInput(req),
+               case .object(let params) = req.params,
+               case .string(let surfaceId)? = params["surface_id"]
+            {
+                actions.append(.noteUserInput(surfaceId: surfaceId))
+            }
+            return actions
+        } catch let error as RPCError {
+            // Keep cmux's own code (e.g. `rate_limited`) so clients can tell a
+            // transient refusal from a relay fault.
+            let resp = RPCResponse(id: req.id, ok: false, result: nil, error: error)
+            return [.sendText(Self.encode(resp))]
+        } catch {
+            let err = RPCError(code: "internal_error",
+                               message: String(describing: error))
+            let resp = RPCResponse(id: req.id, ok: false, result: nil, error: err)
+            return [.sendText(Self.encode(resp))]
+        }
+    }
+
+    /// Applies the device's scope to one request. Returns the actions to send
+    /// instead of handling the request, or nil when it may proceed.
+    private func authorize(_ req: RPCRequest) -> [Action]? {
+        guard let enforcer = scopeEnforcer else { return nil }
+        guard let scope = enforcer.scopeFor() else {
+            // The device was revoked while connected.
+            enforcer.audit?.record(
+                device: enforcer.deviceId, scope: .read, method: req.method, result: "revoked"
+            )
+            return [.close]
+        }
+        var workspaceId: String?
+        var surfaceId: String?
+        if case .object(let params) = req.params {
+            if case .string(let value)? = params["workspace_id"] { workspaceId = value }
+            if case .string(let value)? = params["surface_id"] { surfaceId = value }
+        }
+        guard MethodPolicy.isAllowed(method: req.method, scope: scope) else {
+            enforcer.audit?.record(
+                device: enforcer.deviceId, scope: scope, method: req.method,
+                workspaceId: workspaceId, surfaceId: surfaceId, result: "denied"
+            )
+            let response = Self.errorResponse(
+                id: req.id,
+                code: "forbidden",
+                message: "This device is not allowed to use \(req.method)."
+            )
+            return [.sendText(Self.encode(response))]
+        }
+        if MethodPolicy.isControlAction(method: req.method) {
+            enforcer.audit?.record(
+                device: enforcer.deviceId, scope: scope, method: req.method,
+                workspaceId: workspaceId, surfaceId: surfaceId, result: "allowed"
+            )
+        }
+        return nil
+    }
+
+    /// The 100ms hello timer fired. Returns `[.close]` if the peer never
+    /// sent a hello, `[]` otherwise (handler will see nil and no-op).
+    public func helloMissed() -> [Action] {
+        helloed ? [] : [.close]
+    }
+
+
+    private static func synchronousRelayOwnedResponse(for req: RPCRequest) -> String? {
+        switch req.method {
+        case "host.battery":
+            return encode(RPCResponse(id: req.id, ok: true, result: HostBatteryService.snapshot().json, error: nil))
+        default:
+            return nil
+        }
+    }
+
+    /// Saves one legacy single-frame upload. Runs off this actor because the write can block.
+    private static func legacyUploadResponse(for req: RPCRequest) -> String {
+        do {
+            let uploaded = try RelayFileUploadService.save(params: req.params)
+            return encode(RPCResponse(id: req.id, ok: true, result: uploaded.json, error: nil))
+        } catch {
+            return encode(errorResponse(id: req.id, code: "upload_failed", message: String(describing: error)))
+        }
+    }
+
+    /// Stable code for relay-owned file work that missed its deadline.
+    static let temporarilyUnavailableCode = "temporarily_unavailable"
+
+    /// Answers a relay-owned RPC by its deadline so the frames queued behind it still run.
+    private func bounded(
+        _ req: RPCRequest,
+        timeoutMessage: String = "Mac file access did not finish in time; check for a pending privacy prompt on the Mac",
+        _ work: @escaping @Sendable () async -> String
+    ) async -> String {
+        switch await BoundedRelayWork.run(timeout: relayOwnedTimeout, work) {
+        case .finished(let response):
+            return response
+        case .timedOut:
+            return Self.encode(Self.errorResponse(
+                id: req.id,
+                code: Self.temporarilyUnavailableCode,
+                message: timeoutMessage
+            ))
+        }
+    }
+
+    private func relayOwnedResponse(for req: RPCRequest) async -> String? {
+        guard let method = RemoteRPCMethod(rawValue: req.method) else { return nil }
+        guard method != .hostCapabilities else {
+            return await relayOwnedResponseBody(method: method, req: req)
+        }
+        if method == .surfaceBrowserCapture {
+            return await bounded(req, timeoutMessage: "Browser capture did not finish in time") { [self] in
+                await self.relayOwnedResponseBody(method: method, req: req)
+            }
+        }
+        if method == .feedPendingList || method == .feedReply {
+            return await bounded(req, timeoutMessage: "cmux feed did not answer in time") { [self] in
+                await self.relayOwnedResponseBody(method: method, req: req)
+            }
+        }
+        if method == .claudeSessionsList || method == .claudeTranscriptPage {
+            return await bounded(req, timeoutMessage: "Claude transcript did not load in time") { [self] in
+                await self.relayOwnedResponseBody(method: method, req: req)
+            }
+        }
+        if method == .relayInfo || method == .relayUpdateStart {
+            return await bounded(req, timeoutMessage: "Relay update status did not answer in time") { [self] in
+                await self.relayOwnedResponseBody(method: method, req: req)
+            }
+        }
+        return await bounded(req) { [self] in
+            await self.relayOwnedResponseBody(method: method, req: req)
+        }
+    }
+
+    private func relayOwnedResponseBody(method: RemoteRPCMethod, req: RPCRequest) async -> String {
+        do {
+            let result: JSONValue
+            switch method {
+            case .hostCapabilities:
+                _ = try Self.decode(HostCapabilitiesRequest.self, from: req.params)
+                result = try Self.jsonValue(
+                    HostCapabilitiesResult(capabilities: [
+                        HostCapabilitiesResult.chunkUploadV2Capability,
+                        HostCapabilitiesResult.terminalArtifactsV1Capability,
+                        HostCapabilitiesResult.surfaceDocumentV1Capability,
+                        HostCapabilitiesResult.surfaceBrowserV1Capability,
+                        HostCapabilitiesResult.feedV1Capability,
+                        HostCapabilitiesResult.claudeTranscriptV1Capability,
+                    ] + (await relayUpdateService.capabilities()))
+                )
+
+            case .uploadBegin:
+                let request = try Self.decode(ChunkUploadBeginRequest.self, from: req.params)
+                guard request.bytes <= request.batchBytes else {
+                    throw RemoteProtocolError.invalidField("batch_bytes")
+                }
+                let uploadID = uploadIDSource().uuidString.lowercased()
+                let state = try await uploadService.begin(
+                    authenticatedDeviceID: authenticatedDeviceID,
+                    uploadID: uploadID,
+                    batchID: request.batchId,
+                    batchFileCount: request.batchFileCount,
+                    batchBytes: Int64(request.batchBytes),
+                    filename: request.filename,
+                    mimeType: request.mimeType,
+                    declaredBytes: Int64(request.bytes),
+                    sha256: request.sha256
+                )
+                result = try Self.jsonValue(ChunkUploadBeginResult(
+                    uploadId: state.uploadID,
+                    batchId: request.batchId
+                ))
+
+            case .uploadChunk:
+                let request = try Self.decode(ChunkUploadChunkRequest.self, from: req.params)
+                let nextOffset = try await uploadService.chunk(
+                    authenticatedDeviceID: authenticatedDeviceID,
+                    uploadID: request.uploadId,
+                    offset: Int64(request.offset),
+                    dataBase64: request.dataBase64
+                )
+                result = try Self.jsonValue(ChunkUploadChunkResult(
+                    uploadId: request.uploadId,
+                    nextOffset: Int(nextOffset),
+                    receivedBytes: Int(nextOffset)
+                ))
+
+            case .uploadCommit:
+                let request = try Self.decode(ChunkUploadCommitRequest.self, from: req.params)
+                let committed = try await uploadService.commit(
+                    authenticatedDeviceID: authenticatedDeviceID,
+                    uploadID: request.uploadId
+                )
+                result = try Self.jsonValue(ChunkUploadCommitResult(
+                    uploadId: committed.uploadID,
+                    filename: committed.filename,
+                    path: committed.path,
+                    bytes: Int(committed.bytes),
+                    mimeType: committed.mimeType,
+                    sha256: committed.sha256
+                ))
+
+            case .uploadCancel:
+                let request = try Self.decode(ChunkUploadCancelRequest.self, from: req.params)
+                try await uploadService.cancel(
+                    authenticatedDeviceID: authenticatedDeviceID,
+                    uploadID: request.uploadId
+                )
+                result = try Self.jsonValue(ChunkUploadCancelResult(uploadId: request.uploadId))
+
+            case .artifactScan:
+                let request = try Self.decode(TerminalArtifactScanRequest.self, from: req.params)
+                guard !request.workspaceId.isEmpty else {
+                    throw RemoteProtocolError.invalidField("workspace_id")
+                }
+                guard !request.surfaceId.isEmpty else {
+                    throw RemoteProtocolError.invalidField("surface_id")
+                }
+                let recentUploads = try await uploadService.recentCommittedUploads(
+                    authenticatedDeviceID: authenticatedDeviceID
+                )
+                let scan = try await artifactService.scan(scope: .init(
+                    deviceID: authenticatedDeviceID,
+                    workspaceID: request.workspaceId,
+                    surfaceID: request.surfaceId
+                ), trustedUploadedPaths: recentUploads.map(\.path))
+                result = try Self.scanResultValue(scan)
+
+            case .artifactStat:
+                let request = try Self.decode(TerminalArtifactStatRequest.self, from: req.params)
+                guard !request.artifactId.isEmpty else {
+                    throw RemoteProtocolError.invalidField("artifact_id")
+                }
+                let stat = try await artifactService.stat(
+                    deviceID: authenticatedDeviceID,
+                    artifactID: request.artifactId
+                )
+                result = try Self.jsonValue(TerminalArtifactStatResult(
+                    artifactId: request.artifactId,
+                    filename: stat.displayName,
+                    mimeType: stat.mimeType ?? "application/octet-stream",
+                    bytes: Int(stat.size),
+                    revision: stat.revision
+                ))
+
+            case .artifactFetch:
+                let request = try Self.decode(TerminalArtifactFetchRequest.self, from: req.params)
+                let chunk = try await artifactService.fetch(
+                    deviceID: authenticatedDeviceID,
+                    artifactID: request.artifactId,
+                    offset: Int64(request.offset)
+                )
+                result = try Self.jsonValue(TerminalArtifactFetchResult(
+                    artifactId: request.artifactId,
+                    offset: Int(chunk.offset),
+                    totalBytes: Int(chunk.totalSize),
+                    revision: chunk.revision,
+                    dataBase64: chunk.data.base64EncodedString(),
+                    eof: chunk.eof
+                ))
+
+            case .artifactThumbnail:
+                let request = try Self.decode(TerminalArtifactThumbnailRequest.self, from: req.params)
+                let thumbnail = try await artifactService.thumbnail(
+                    deviceID: authenticatedDeviceID,
+                    artifactID: request.artifactId,
+                    maxDimension: request.dimension
+                )
+                result = try Self.jsonValue(TerminalArtifactThumbnailResult(
+                    artifactId: request.artifactId,
+                    revision: thumbnail.revision,
+                    dimension: request.dimension,
+                    width: thumbnail.pixelWidth,
+                    height: thumbnail.pixelHeight,
+                    mimeType: "image/jpeg",
+                    dataBase64: thumbnail.data.base64EncodedString()
+                ))
+
+            case .surfaceDocumentOpen:
+                let request = try Self.decode(SurfaceDocumentOpenRequest.self, from: req.params)
+                guard !request.workspaceId.isEmpty else {
+                    throw RemoteProtocolError.invalidField("workspace_id")
+                }
+                guard !request.surfaceId.isEmpty else {
+                    throw RemoteProtocolError.invalidField("surface_id")
+                }
+                let document = try await artifactService.openDocument(scope: .init(
+                    deviceID: authenticatedDeviceID,
+                    workspaceID: request.workspaceId,
+                    surfaceID: request.surfaceId
+                ))
+                result = try Self.scanResultValue(document)
+
+            case .surfaceBrowserCapture:
+                let request = try Self.decode(SurfaceBrowserCaptureRequest.self, from: req.params)
+                guard !request.workspaceId.isEmpty else {
+                    throw RemoteProtocolError.invalidField("workspace_id")
+                }
+                guard !request.surfaceId.isEmpty else {
+                    throw RemoteProtocolError.invalidField("surface_id")
+                }
+                result = try Self.jsonValue(try await browserCaptureService.capture(
+                    workspaceID: request.workspaceId,
+                    surfaceID: request.surfaceId
+                ))
+
+            case .feedPendingList:
+                let request = try Self.decode(FeedPendingListRequest.self, from: req.params)
+                result = try Self.jsonValue(try await feedService.pending(
+                    limit: request.limit ?? FeedLimits.defaultListLimit
+                ))
+
+            case .feedReply:
+                let request = try Self.decode(FeedReplyRequest.self, from: req.params)
+                result = try Self.jsonValue(try await feedService.reply(request))
+
+            case .claudeSessionsList:
+                let request = try Self.decode(ClaudeSessionListRequest.self, from: req.params)
+                result = try Self.jsonValue(try await claudeTranscriptService.sessions(
+                    limit: request.limit ?? ClaudeTranscriptLimits.defaultSessionLimit
+                ))
+
+            case .claudeTranscriptPage:
+                let request = try Self.decode(ClaudeTranscriptPageRequest.self, from: req.params)
+                result = try Self.jsonValue(try await claudeTranscriptService.page(request))
+
+            case .relayInfo:
+                _ = try Self.decode(RelayInfoRequest.self, from: req.params)
+                result = try Self.jsonValue(await relayUpdateService.info())
+
+            case .relayUpdateStart:
+                _ = try Self.decode(RelayUpdateStartRequest.self, from: req.params)
+                result = try Self.jsonValue(try await relayUpdateService.start())
+            }
+            return Self.encode(RPCResponse(id: req.id, ok: true, result: result))
+        } catch let error as RemoteProtocolError {
+            return Self.encode(Self.protocolErrorResponse(id: req.id, error: error))
+        } catch let error as ChunkedFileUploadService.ServiceError {
+            return Self.encode(Self.uploadErrorResponse(id: req.id, error: error))
+        } catch let error as TerminalArtifactService.Error {
+            return Self.encode(Self.artifactErrorResponse(id: req.id, error: error))
+        } catch let error as BrowserCaptureService.Error {
+            return Self.encode(Self.browserCaptureErrorResponse(id: req.id, error: error))
+        } catch let error as FeedService.Error {
+            return Self.encode(Self.feedErrorResponse(id: req.id, error: error))
+        } catch let error as ClaudeTranscriptService.Error {
+            return Self.encode(Self.claudeTranscriptErrorResponse(id: req.id, error: error))
+        } catch let error as RelayUpdateService.Error {
+            return Self.encode(Self.relayUpdateErrorResponse(id: req.id, error: error))
+        } catch {
+            return Self.encode(Self.errorResponse(
+                id: req.id,
+                code: RemoteErrorCode.invalidRequest.rawValue,
+                message: "Malformed relay-owned RPC",
+                data: .object(["reason": .string(String(describing: error))])
+            ))
+        }
+    }
+
+    private static func decode<Value: Decodable>(
+        _ type: Value.Type,
+        from params: JSONValue
+    ) throws -> Value {
+        let data = try JSONEncoder().encode(params)
+        return try SharedKitJSON.snakeCaseDecoder.decode(type, from: data)
+    }
+
+    private static func scanResultValue(_ scan: TerminalArtifactService.ScanResult) throws -> JSONValue {
+        try jsonValue(TerminalArtifactScanResult(
+            generation: scan.generation,
+            artifacts: scan.artifacts.map {
+                TerminalArtifact(
+                    artifactId: $0.id,
+                    filename: $0.displayName,
+                    mimeType: $0.mimeType ?? "application/octet-stream",
+                    bytes: Int($0.size),
+                    revision: $0.revision,
+                    isImage: $0.kind == "image"
+                )
+            }
+        ))
+    }
+
+    private static func jsonValue<Value: Encodable>(_ value: Value) throws -> JSONValue {
+        let data = try SharedKitJSON.snakeCaseEncoder.encode(value)
+        return try JSONDecoder().decode(JSONValue.self, from: data)
+    }
+
+    private static func protocolErrorResponse(id: String, error: RemoteProtocolError) -> RPCResponse {
+        switch error {
+        case .missingField(let field):
+            return errorResponse(id: id, code: "missing_field", message: "Missing required field", field: field)
+        case .invalidField(let field):
+            return errorResponse(id: id, code: "invalid_field", message: "Invalid field", field: field)
+        case .negativeOffset:
+            return errorResponse(id: id, code: "invalid_offset", message: "Offset must not be negative", field: "offset")
+        case .chunkTooLarge(let maxBytes):
+            return errorResponse(
+                id: id,
+                code: "chunk_too_large",
+                message: "Chunk exceeds the maximum decoded size",
+                data: .object(["field": .string("data_base64"), "max_bytes": .int(Int64(maxBytes))])
+            )
+        case .invalidBase64:
+            return errorResponse(id: id, code: "invalid_base64", message: "Base64 must be canonical", field: "data_base64")
+        case .invalidThumbnailDimension:
+            return errorResponse(id: id, code: "invalid_field", message: "Thumbnail dimension is unsupported", field: "dimension")
+        }
+    }
+
+    private static func uploadErrorResponse(
+        id: String,
+        error: ChunkedFileUploadService.ServiceError
+    ) -> RPCResponse {
+        let mapping: (String, String?)
+        switch error.code {
+        case "device_scope_mismatch", "invalid_device_id", "unauthenticated": mapping = ("forbidden", nil)
+        case "offset_conflict": mapping = ("invalid_offset", "offset")
+        case "file_too_large": mapping = ("size_limit_exceeded", "bytes")
+        case "batch_file_limit", "too_many_uploads": mapping = ("size_limit_exceeded", "batch_file_count")
+        case "batch_too_large": mapping = ("size_limit_exceeded", "batch_bytes")
+        case "batch_conflict": mapping = ("upload_conflict", "batch_id")
+        case "invalid_upload_id": mapping = ("invalid_field", "upload_id")
+        case "invalid_batch_id": mapping = ("invalid_field", "batch_id")
+        case "invalid_batch_file_count": mapping = ("invalid_field", "batch_file_count")
+        case "invalid_batch_bytes": mapping = ("invalid_field", "batch_bytes")
+        case "invalid_filename": mapping = ("invalid_field", "filename")
+        case "invalid_mime_type": mapping = ("invalid_field", "mime_type")
+        case "invalid_size", "size_mismatch": mapping = ("invalid_field", "bytes")
+        default: mapping = (error.code, nil)
+        }
+        return errorResponse(id: id, code: mapping.0, message: error.message, field: mapping.1)
+    }
+
+    private static func artifactErrorResponse(
+        id: String,
+        error: TerminalArtifactService.Error
+    ) -> RPCResponse {
+        switch error {
+        case .forbidden:
+            return errorResponse(id: id, code: "forbidden", message: "Artifact is not authorized", field: "artifact_id")
+        case .expired:
+            return errorResponse(id: id, code: "expired", message: "Artifact authorization expired", field: "artifact_id")
+        case .fileChanged:
+            return errorResponse(id: id, code: "file_changed", message: "Artifact changed after authorization", field: "artifact_id")
+        case .fileNotFound:
+            return errorResponse(id: id, code: "not_found", message: "Artifact was not found", field: "artifact_id")
+        case .invalidParams:
+            return errorResponse(id: id, code: "invalid_field", message: "Artifact request parameters are invalid")
+        case .unsupportedMedia:
+            return errorResponse(id: id, code: "unsupported_media", message: "Artifact media is unsupported", field: "artifact_id")
+        case .surfaceNotDocument:
+            return errorResponse(
+                id: id,
+                code: RemoteErrorCode.surfaceNotDocument.rawValue,
+                message: "Surface is not an open document",
+                field: "surface_id"
+            )
+        case .sizeLimitExceeded:
+            return errorResponse(
+                id: id,
+                code: RemoteErrorCode.sizeLimitExceeded.rawValue,
+                message: "Document exceeds the relay size limit",
+                data: .object([
+                    "field": .string("bytes"),
+                    "max_bytes": .int(TerminalArtifactService.maximumDocumentBytes),
+                ])
+            )
+        case .native(let code):
+            let mapped: String
+            switch code {
+            case "unauthorized", "forbidden": mapped = "forbidden"
+            case "file_not_found", "not_found": mapped = "not_found"
+            default: mapped = code
+            }
+            return errorResponse(id: id, code: mapped, message: "cmux artifact operation failed")
+        }
+    }
+
+    private static func browserCaptureErrorResponse(
+        id: String,
+        error: BrowserCaptureService.Error
+    ) -> RPCResponse {
+        switch error {
+        case .surfaceNotBrowser:
+            return errorResponse(
+                id: id,
+                code: RemoteErrorCode.surfaceNotBrowser.rawValue,
+                message: "Surface is not an open browser",
+                field: "surface_id"
+            )
+        case .sizeLimitExceeded:
+            return errorResponse(
+                id: id,
+                code: RemoteErrorCode.sizeLimitExceeded.rawValue,
+                message: "Browser capture exceeds the relay size limit",
+                data: .object([
+                    "field": .string("image_base64"),
+                    "max_bytes": .int(Int64(SurfaceBrowserCaptureLimits.maxImageBytes)),
+                ])
+            )
+        case .unsupportedImage:
+            return errorResponse(
+                id: id,
+                code: RemoteErrorCode.unsupportedMedia.rawValue,
+                message: "Browser capture image is unsupported"
+            )
+        case .native(let code):
+            return errorResponse(id: id, code: code, message: "cmux browser capture failed")
+        }
+    }
+
+    private static func feedErrorResponse(id: String, error: FeedService.Error) -> RPCResponse {
+        switch error {
+        case .notPending:
+            return errorResponse(
+                id: id,
+                code: RemoteErrorCode.feedRequestNotPending.rawValue,
+                message: "Feed request is no longer pending",
+                field: "request_id"
+            )
+        case .invalidField(let field):
+            return errorResponse(id: id, code: RemoteErrorCode.invalidField.rawValue, message: "Invalid field", field: field)
+        case .malformed:
+            return errorResponse(id: id, code: "internal_error", message: "cmux feed response malformed")
+        case .native(let code):
+            return errorResponse(id: id, code: code, message: "cmux feed request failed")
+        }
+    }
+
+    private static func claudeTranscriptErrorResponse(id: String, error: ClaudeTranscriptService.Error) -> RPCResponse {
+        switch error {
+        case .sessionNotFound:
+            return errorResponse(
+                id: id,
+                code: RemoteErrorCode.claudeSessionNotFound.rawValue,
+                message: "Claude session not found",
+                field: "session_id"
+            )
+        case .invalidField(let field):
+            return errorResponse(id: id, code: RemoteErrorCode.invalidField.rawValue, message: "Invalid field", field: field)
+        case .fileChanged:
+            return errorResponse(id: id, code: temporarilyUnavailableCode, message: "Claude transcript changed while reading")
+        case .malformed:
+            return errorResponse(id: id, code: "internal_error", message: "cmux vault response malformed")
+        case .native(let code):
+            return errorResponse(id: id, code: code, message: "cmux vault request failed")
+        }
+    }
+
+    private static func dispatchNative(
+        cmux: CMUXFacade,
+        method: String,
+        params: JSONValue
+    ) async -> TerminalArtifactService.NativeResult {
+        do {
+            return .success(try await cmux.dispatch(method: method, params: params))
+        } catch let error as RPCError {
+            return .failure(code: error.code)
+        } catch {
+            return .failure(code: "internal_error")
+        }
+    }
+
+    private static func relayOwnedAction(for req: RPCRequest) -> Action? {
+        guard case .object(let params) = req.params else { return nil }
+        switch req.method {
+        case "surface.subscribe":
+            guard case .string(let workspaceId)? = params["workspace_id"],
+                  case .string(let surfaceId)? = params["surface_id"]
+            else {
+                return .sendText(Self.encode(errorResponse(id: req.id, code: "invalid_params",
+                                                           message: "surface.subscribe requires workspace_id and surface_id")))
+            }
+            let lines: Int
+            if case .int(let value)? = params["lines"] { lines = max(1, Int(value)) }
+            else { lines = 200 }
+            return .subscribe(responseId: req.id, workspaceId: workspaceId, surfaceId: surfaceId, lines: lines)
+        case "surface.unsubscribe":
+            guard case .string(let surfaceId)? = params["surface_id"] else {
+                return .sendText(Self.encode(errorResponse(id: req.id, code: "invalid_params",
+                                                           message: "surface.unsubscribe requires surface_id")))
+            }
+            return .unsubscribe(responseId: req.id, surfaceId: surfaceId)
+        case "surface.read_text":
+            guard case .string(let surfaceId)? = params["surface_id"] else {
+                return .sendText(Self.encode(errorResponse(id: req.id, code: "invalid_params",
+                                                           message: "surface.read_text requires surface_id")))
+            }
+            return .requestFull(responseId: req.id, surfaceId: surfaceId)
+        default:
+            return nil
+        }
+    }
+
+    /// Rewrites legacy page-key names from older apps to the names cmux accepts.
+    ///
+    /// Only unmodified `pgup`/`pgdn`/`pagedown` style names that decode to a page key are
+    /// changed; every other request passes through untouched.
+    static func daemonCompatibleParams(for request: RPCRequest) -> JSONValue {
+        guard request.method == "surface.send_key",
+              case .object(var params) = request.params,
+              case .string(let key)? = params["key"],
+              let decoded = KeyEncoder.decode(key),
+              decoded == .pageUp || decoded == .pageDown
+        else { return request.params }
+        params["key"] = .string(KeyEncoder.encode(decoded))
+        return .object(params)
+    }
+
+    private static func isSuccessfulInput(_ request: RPCRequest) -> Bool {
+        request.method == "surface.send_text" || request.method == "surface.send_key"
+    }
+
+    private static func relayUpdateErrorResponse(id: String, error: RelayUpdateService.Error) -> RPCResponse {
+        switch error {
+        case .disabled:
+            return errorResponse(
+                id: id,
+                code: RemoteErrorCode.updateDisabled.rawValue,
+                message: "Relay auto-update is turned off on the Mac"
+            )
+        case .unavailable:
+            return errorResponse(
+                id: id,
+                code: RemoteErrorCode.updateUnavailable.rawValue,
+                message: "This relay cannot update itself"
+            )
+        }
+    }
+
+    private static func okResponse(id: String) -> RPCResponse {
+        RPCResponse(id: id, ok: true, result: .object([:]), error: nil)
+    }
+
+    private static func errorResponse(
+        id: String,
+        code: String,
+        message: String,
+        field: String? = nil
+    ) -> RPCResponse {
+        errorResponse(
+            id: id,
+            code: code,
+            message: message,
+            data: field.map { .object(["field": .string($0)]) }
+        )
+    }
+
+    private static func errorResponse(
+        id: String,
+        code: String,
+        message: String,
+        data: JSONValue?
+    ) -> RPCResponse {
+        RPCResponse(
+            id: id,
+            ok: false,
+            result: nil,
+            error: RPCError(code: code, message: message, data: data)
+        )
+    }
+
+    public static func encodeForHandler(_ resp: RPCResponse) -> String {
+        encode(resp)
+    }
+
+    private static func encode(_ resp: RPCResponse) -> String {
+        guard let data = try? SharedKitJSON.deterministicEncoder.encode(resp),
+              let s = String(data: data, encoding: .utf8) else { return "{}" }
+        return s
+    }
+}
+
+// MARK: - NIO channel handler
+
+
+/// Thin NIO handler whose connection-owned mutable state is confined to the
+/// channel event loop. Async actions capture the protocol machine and a weak
+/// lifecycle reference, never the handler or `ChannelHandlerContext`.
+public final class WebSocketHandler: ChannelInboundHandler, @unchecked Sendable {
+    public typealias InboundIn = WebSocketFrame
+    public typealias OutboundOut = WebSocketFrame
+
+    /// Default per-connection bound for WebSocket frames waiting behind a write.
+    public static let defaultMaximumQueuedOutputBytes = 2 * 1024 * 1024
+
+    /// Default hard cap on admitted but unfinished inbound actions per connection.
+    public static let defaultMaximumOutstandingInboundActions = 64
+
+    /// Default retained payload cap, sized for two maximum WebSocket frames.
+    public static let defaultMaximumOutstandingInboundBytes = 2 * HTTPServer.maxWebSocketFrameBytes
+
+    public let deviceId: String
+    private let deviceStore: DeviceStore
+    private let sessionManager: any WebSocketSessionManaging
+    private let machine: WSProtocolMachine
+    private let logger = Logger(label: "cmux-relay.ws")
+    private let maximumQueuedOutputBytes: Int
+    private let maximumOutstandingInboundActions: Int
+    private let maximumOutstandingInboundBytes: Int
+
+    private var actionQueue: WSActionQueue?
+    private var sessionLifecycle: WebSocketSessionLifecycle?
+
+    public convenience init(
+        deviceId: String,
+        deviceStore: DeviceStore,
+        sessionManager: SessionManager,
+        cmuxClient: CMUXFacade,
+        maximumQueuedOutputBytes: Int = WebSocketHandler.defaultMaximumQueuedOutputBytes,
+        maximumOutstandingInboundActions: Int = WebSocketHandler.defaultMaximumOutstandingInboundActions,
+        maximumOutstandingInboundBytes: Int = WebSocketHandler.defaultMaximumOutstandingInboundBytes
+    ) {
+        self.init(
+            deviceId: deviceId,
+            deviceStore: deviceStore,
+            sessionManager: sessionManager,
+            machine: WSProtocolMachine(cmux: cmuxClient),
+            maximumQueuedOutputBytes: maximumQueuedOutputBytes,
+            maximumOutstandingInboundActions: maximumOutstandingInboundActions,
+            maximumOutstandingInboundBytes: maximumOutstandingInboundBytes
+        )
+    }
+
+    convenience init(
+        deviceId: String,
+        deviceStore: DeviceStore,
+        sessionManager: SessionManager,
+        cmuxClient: CMUXFacade,
+        uploadService: ChunkedFileUploadService,
+        artifactService: TerminalArtifactService,
+        browserCaptureService: BrowserCaptureService? = nil,
+        feedService: FeedService? = nil,
+        claudeTranscriptService: ClaudeTranscriptService? = nil,
+        relayUpdateService: RelayUpdateService? = nil,
+        scopeEnforcer: ScopeEnforcer? = nil,
+        maximumQueuedOutputBytes: Int = WebSocketHandler.defaultMaximumQueuedOutputBytes,
+        maximumOutstandingInboundActions: Int = WebSocketHandler.defaultMaximumOutstandingInboundActions,
+        maximumOutstandingInboundBytes: Int = WebSocketHandler.defaultMaximumOutstandingInboundBytes
+    ) {
+        self.init(
+            deviceId: deviceId,
+            deviceStore: deviceStore,
+            sessionManager: sessionManager,
+            machine: WSProtocolMachine(
+                cmux: cmuxClient,
+                authenticatedDeviceID: deviceId,
+                uploadService: uploadService,
+                artifactService: artifactService,
+                browserCaptureService: browserCaptureService,
+                feedService: feedService,
+                claudeTranscriptService: claudeTranscriptService,
+                relayUpdateService: relayUpdateService,
+                scopeEnforcer: scopeEnforcer
+            ),
+            maximumQueuedOutputBytes: maximumQueuedOutputBytes,
+            maximumOutstandingInboundActions: maximumOutstandingInboundActions,
+            maximumOutstandingInboundBytes: maximumOutstandingInboundBytes
+        )
+    }
+
+    convenience init(
+        deviceId: String,
+        deviceStore: DeviceStore,
+        sessionLifecycleManager: any WebSocketSessionManaging,
+        cmuxClient: CMUXFacade,
+        maximumQueuedOutputBytes: Int = WebSocketHandler.defaultMaximumQueuedOutputBytes,
+        maximumOutstandingInboundActions: Int = WebSocketHandler.defaultMaximumOutstandingInboundActions,
+        maximumOutstandingInboundBytes: Int = WebSocketHandler.defaultMaximumOutstandingInboundBytes
+    ) {
+        self.init(
+            deviceId: deviceId,
+            deviceStore: deviceStore,
+            sessionManager: sessionLifecycleManager,
+            machine: WSProtocolMachine(cmux: cmuxClient),
+            maximumQueuedOutputBytes: maximumQueuedOutputBytes,
+            maximumOutstandingInboundActions: maximumOutstandingInboundActions,
+            maximumOutstandingInboundBytes: maximumOutstandingInboundBytes
+        )
+    }
+
+    private init(
+        deviceId: String,
+        deviceStore: DeviceStore,
+        sessionManager: any WebSocketSessionManaging,
+        machine: WSProtocolMachine,
+        maximumQueuedOutputBytes: Int,
+        maximumOutstandingInboundActions: Int,
+        maximumOutstandingInboundBytes: Int
+    ) {
+        self.deviceId = deviceId
+        self.deviceStore = deviceStore
+        self.sessionManager = sessionManager
+        self.machine = machine
+        self.maximumQueuedOutputBytes = max(1, maximumQueuedOutputBytes)
+        self.maximumOutstandingInboundActions = max(1, maximumOutstandingInboundActions)
+        self.maximumOutstandingInboundBytes = max(1, maximumOutstandingInboundBytes)
+    }
+
+    public func handlerAdded(context: ChannelHandlerContext) {
+        installLifecycleIfNeeded(context: context)
+        if context.channel.isActive {
+            activateIfNeeded()
+        }
+    }
+
+    public func channelActive(context: ChannelHandlerContext) {
+        installLifecycleIfNeeded(context: context)
+        activateIfNeeded()
+    }
+
+    public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        precondition(context.eventLoop.inEventLoop)
+        let frame = unwrapInboundIn(data)
+        guard frame.opcode == .text else { return }
+        let buffer = frame.unmaskedData
+        guard let text = buffer.getString(
+            at: buffer.readerIndex,
+            length: buffer.readableBytes
+        ) else { return }
+        guard let actionQueue,
+              let sessionLifecycle,
+              let generation = sessionLifecycle.activeGeneration
+        else {
+            // Previously silent: a client would only see its RPC time out.
+            logger.warning("rpc dropped: no active session method=\(InboundRPCTrace.method(of: text)) device=\(deviceId.prefix(8))")
+            return
+        }
+
+        let machine = self.machine
+        let trace = InboundRPCTrace(text: text, deviceId: deviceId, receivedAt: .now)
+        let logger = self.logger
+        guard actionQueue.enqueue(retainedByteCount: text.utf8.count, { [weak sessionLifecycle] in
+            let startedAt = ContinuousClock.now
+            let actions = await machine.processText(text)
+            guard !Task.isCancelled else { return }
+            await sessionLifecycle?.apply(actions: actions, generation: generation)
+            if let line = trace.line(
+                startedAt: startedAt,
+                finishedAt: .now,
+                traceAll: InboundRPCTrace.traceAll
+            ) {
+                logger.info("\(line)")
+            }
+        }) else {
+            logger.warning("Closing WebSocket after inbound action queue overflow")
+            invalidate(context: context, closeChannel: true)
+            return
+        }
+
+        if actionQueue.shouldApplyBackpressure {
+            context.channel.setOption(ChannelOptions.autoRead, value: false).whenFailure {
+                self.logger.warning("Failed to pause WebSocket inbound reads: \($0)")
+            }
+        }
+    }
+
+    public func channelWritabilityChanged(context: ChannelHandlerContext) {
+        precondition(context.eventLoop.inEventLoop)
+        sessionLifecycle?.writabilityChanged()
+        context.fireChannelWritabilityChanged()
+    }
+
+    public func channelInactive(context: ChannelHandlerContext) {
+        invalidate(context: context, closeChannel: false)
+    }
+
+    public func handlerRemoved(context: ChannelHandlerContext) {
+        invalidate(context: context, closeChannel: true)
+    }
+
+    public func errorCaught(context: ChannelHandlerContext, error: Error) {
+        logger.warning("WebSocket channel failed: \(String(describing: error))")
+        invalidate(context: context, closeChannel: true)
+    }
+
+    private func installLifecycleIfNeeded(context: ChannelHandlerContext) {
+        precondition(context.eventLoop.inEventLoop)
+        guard actionQueue == nil, sessionLifecycle == nil else { return }
+        let channel = WSChannelContext(
+            context,
+            maximumQueuedOutputBytes: maximumQueuedOutputBytes
+        )
+        let logger = self.logger
+        actionQueue = WSActionQueue(
+            eventLoop: context.eventLoop,
+            maximumOutstandingActions: maximumOutstandingInboundActions,
+            maximumOutstandingRetainedBytes: maximumOutstandingInboundBytes
+        ) { [weak channel] in
+            channel?.setAutoRead(true) { error in
+                logger.warning("Failed to resume WebSocket inbound reads: \(error)")
+            }
+        }
+        sessionLifecycle = WebSocketSessionLifecycle(
+            eventLoop: context.eventLoop,
+            channel: channel,
+            manager: sessionManager,
+            deviceId: deviceId
+        )
+    }
+
+    private func activateIfNeeded() {
+        guard let actionQueue, let sessionLifecycle else { return }
+        _ = sessionLifecycle.activate(machine: machine, queue: actionQueue)
+    }
+
+    private func invalidate(context: ChannelHandlerContext, closeChannel: Bool) {
+        precondition(context.eventLoop.inEventLoop)
+        let lifecycle = sessionLifecycle
+        let queue = actionQueue
+        sessionLifecycle = nil
+        actionQueue = nil
+        queue?.invalidate()
+        lifecycle?.invalidate(closeChannel: closeChannel)
+    }
+}

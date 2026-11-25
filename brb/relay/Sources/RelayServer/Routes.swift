@@ -1,0 +1,400 @@
+import Foundation
+import NIOCore
+import NIOHTTP1
+import Crypto
+import RelayCore
+import SharedKit
+import Logging
+
+/// Lightweight response envelope. The HTTP layer in M3.11 will translate
+/// this into NIOHTTP1 head + body chunks; keeping it small here makes
+/// `Routes` independent of the channel pipeline.
+public struct HTTPResponseLite: Sendable {
+    public var status: HTTPResponseStatus
+    public var body: Data?
+    public var headers: [(String, String)]
+
+    public init(
+        _ status: HTTPResponseStatus,
+        body: Data? = nil,
+        headers: [(String, String)] = []
+    ) {
+        self.status = status
+        self.body = body
+        self.headers = headers
+    }
+}
+
+/// What registration needs beyond Tailscale identity: a one-time pairing code
+/// made on the Mac, and a limit on failed attempts per source address.
+public struct PairingGate: Sendable {
+    public let codes: PairingCodeStore
+    public let addressLimiter: AttemptLimiter
+
+    public init(codes: PairingCodeStore, addressLimiter: AttemptLimiter) {
+        self.codes = codes
+        self.addressLimiter = addressLimiter
+    }
+}
+
+/// HTTP REST endpoints. Spec section 6.1.
+///
+/// Actor-isolated because authenticated paths (`apns`, `revoke`) and the
+/// register flow can race with `ConfigStore.reload` and the WS handler.
+/// The DeviceStore + AuthService it depends on are themselves
+/// thread-safe, so this layer just sequences the request handling.
+public actor Routes {
+    private let deviceStore: DeviceStore
+    private let config: @Sendable () -> RelayConfig
+    private let auth: AuthService
+    private let registrationAuthorizer: RegistrationAuthorizer
+    let registrationPeerResolver: RegistrationPeerResolver
+    let allowLocalhost: Bool
+    private let pairing: PairingGate?
+    private let logger = Logger(label: "brb-relay.registration")
+
+    public init(
+        deviceStore: DeviceStore,
+        config: @escaping @Sendable () -> RelayConfig,
+        auth: AuthService,
+        allowSelfLogin: Bool = true,
+        allowLocalhost: Bool = Routes.defaultAllowLocalhost(),
+        clock: any Clock = SystemClock(),
+        selfLoginCacheDuration: TimeInterval = 5,
+        pairing: PairingGate? = nil
+    ) {
+        self.pairing = pairing
+        self.deviceStore = deviceStore
+        self.config = config
+        self.auth = auth
+        self.allowLocalhost = allowLocalhost
+        registrationAuthorizer = RegistrationAuthorizer(
+            auth: auth,
+            config: config,
+            allowSelfLogin: allowSelfLogin,
+            clock: clock,
+            cacheDuration: selfLoginCacheDuration
+        )
+        registrationPeerResolver = RegistrationPeerResolver(
+            auth: auth,
+            clock: clock,
+            cacheDuration: selfLoginCacheDuration
+        )
+    }
+
+    public init(
+        deviceStore: DeviceStore,
+        config: RelayConfig,
+        auth: AuthService,
+        allowSelfLogin: Bool = true,
+        allowLocalhost: Bool = Routes.defaultAllowLocalhost(),
+        clock: any Clock = SystemClock(),
+        selfLoginCacheDuration: TimeInterval = 5,
+        pairing: PairingGate? = nil
+    ) {
+        self.pairing = pairing
+        self.deviceStore = deviceStore
+        self.config = { config }
+        self.auth = auth
+        self.allowLocalhost = allowLocalhost
+        registrationAuthorizer = RegistrationAuthorizer(
+            auth: auth,
+            config: { config },
+            allowSelfLogin: allowSelfLogin,
+            clock: clock,
+            cacheDuration: selfLoginCacheDuration
+        )
+        registrationPeerResolver = RegistrationPeerResolver(
+            auth: auth,
+            clock: clock,
+            cacheDuration: selfLoginCacheDuration
+        )
+    }
+
+    /// Reads `CMUX_DEV_ALLOW_LOCALHOST=1` from the environment. When true,
+    /// loopback callers (`127.0.0.1` / `::1`) bypass `tailscaled.whois` —
+    /// macOS short-circuits packets to the local Tailscale IP through `lo0`,
+    /// so the iOS Simulator on the same Mac can never produce a remote
+    /// address tailscaled will recognise. We keep the bypass opt-in so it
+    /// never ships to a production binding.
+    ///
+    /// BRB compiles this out of release builds: the bypass skips both Tailscale
+    /// identity and the pairing code, so it must not exist in a shipped binary.
+    public static func defaultAllowLocalhost() -> Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["CMUX_DEV_ALLOW_LOCALHOST"] == "1"
+        #else
+        return false
+        #endif
+    }
+
+    /// Top-level dispatch. `deviceId` is `nil` until the HTTP layer has
+    /// validated the bearer token (M3.11) — `Routes` itself does not
+    /// re-validate, so authenticated paths short-circuit on `deviceId == nil`.
+    public func handle(method: HTTPMethod,
+                       path: String,
+                       body: Data?,
+                       deviceId: String?,
+                       remoteAddr: String) async -> HTTPResponseLite
+    {
+        switch (method, path) {
+        case (.GET, "/v1/health"):
+            return .init(.ok, body: Data(#"{"ok":true}"#.utf8))
+
+        case (.GET, "/v1/state"):
+            guard deviceId != nil else { return .init(.unauthorized) }
+            return state()
+
+        case (.POST, "/v1/devices/me/register"):
+            return await register(remoteAddr: remoteAddr, body: body)
+
+        case (.GET, "/v1/devices/me"):
+            guard let did = deviceId,
+                  let device = deviceStore.lookup(deviceId: did) else {
+                return .init(.unauthorized)
+            }
+            return deviceStatus(device)
+
+        case (.POST, "/v1/devices/me/apns"):
+            guard let did = deviceId,
+                  deviceStore.lookup(deviceId: did) != nil else {
+                return .init(.unauthorized)
+            }
+            return registerApns(deviceId: did, body: body)
+
+        case (.DELETE, "/v1/devices/me"):
+            guard let did = deviceId else { return .init(.unauthorized) }
+            do {
+                try deviceStore.revoke(deviceId: did)
+                return .init(.noContent)
+            } catch {
+                logger.error("device revoke failed: registry persistence error")
+                return .init(.internalServerError)
+            }
+
+        default:
+            return .init(.notFound)
+        }
+    }
+
+    // MARK: - GET /v1/devices/me
+
+    private func deviceStatus(_ device: Device) -> HTTPResponseLite {
+        struct Response: Encodable {
+            let deviceId: String
+            enum CodingKeys: String, CodingKey { case deviceId = "device_id" }
+        }
+        do {
+            let body = try JSONEncoder().encode(Response(deviceId: device.deviceId))
+            return .init(
+                .ok,
+                body: body,
+                headers: [("Content-Type", "application/json")]
+            )
+        } catch {
+            return .init(.internalServerError)
+        }
+    }
+
+    // MARK: - GET /v1/state
+
+    private func state() -> HTTPResponseLite {
+        struct State: Encodable {
+            let snippets: [RelayConfig.Snippet]
+            let defaultFps: Int
+            enum CodingKeys: String, CodingKey {
+                case snippets, defaultFps = "default_fps"
+            }
+        }
+        let currentConfig = config()
+        let state = State(
+            snippets: currentConfig.snippets,
+            defaultFps: currentConfig.defaultFps
+        )
+        do {
+            return .init(.ok, body: try JSONEncoder().encode(state))
+        } catch {
+            logger.error("state response failed to encode")
+            return .init(.internalServerError)
+        }
+    }
+
+    // MARK: - POST /v1/devices/me/apns
+
+    private func registerApns(deviceId: String, body: Data?) -> HTTPResponseLite {
+        struct Payload: Decodable {
+            let apnsToken: String
+            let env: String
+            enum CodingKeys: String, CodingKey {
+                case apnsToken = "apns_token", env
+            }
+        }
+        guard let body,
+              let p = try? JSONDecoder().decode(Payload.self, from: body),
+              Self.isAPNsToken(p.apnsToken) else {
+            return .init(.badRequest)
+        }
+        guard p.env == "prod" || p.env == "sandbox" else {
+            return .init(.badRequest)
+        }
+        do {
+            try deviceStore.setAPNsToken(
+                deviceId: deviceId,
+                token: p.apnsToken,
+                env: p.env
+            )
+            return .init(.noContent)
+        } catch {
+            logger.error("APNs token update failed: registry persistence error")
+            return .init(.internalServerError)
+        }
+    }
+
+    private static func isAPNsToken(_ token: String) -> Bool {
+        !token.isEmpty && token.utf8.count.isMultiple(of: 2) && token.utf8.allSatisfy { byte in
+            (48...57).contains(byte)
+                || (65...70).contains(byte)
+                || (97...102).contains(byte)
+        }
+    }
+
+    // MARK: - POST /v1/devices/me/register
+
+    /// Registration with a failed-attempt limit around it. A locked-out source
+    /// gets 429 even if it now presents a valid code.
+    private func register(remoteAddr: String, body: Data?) async -> HTTPResponseLite {
+        guard let pairing else {
+            return await registerNew(remoteAddr: remoteAddr, body: body)
+        }
+        let key = "addr:\(remoteAddr)"
+        if let remaining = pairing.addressLimiter.lockedFor(key) {
+            logger.warning("registration refused: source is locked out")
+            return Self.lockedOutResponse(retryAfter: remaining)
+        }
+        let response = await registerNew(remoteAddr: remoteAddr, body: body)
+        switch response.status {
+        case .ok:
+            pairing.addressLimiter.recordSuccess(key)
+        case .forbidden:
+            if pairing.addressLimiter.recordFailure(key) {
+                logger.warning("registration: too many failures, source locked out")
+            }
+        default:
+            break
+        }
+        return response
+    }
+
+    static func lockedOutResponse(retryAfter: TimeInterval) -> HTTPResponseLite {
+        let seconds = max(1, Int(retryAfter.rounded(.up)))
+        return .init(
+            .tooManyRequests,
+            body: Data(#"{"error":"locked_out","retry_after_seconds":\#(seconds)}"#.utf8),
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Retry-After", String(seconds)),
+            ]
+        )
+    }
+
+    /// The pairing code in a register request body: `{"code":"ABCD-..."}`.
+    static func presentedCode(from body: Data?) -> String? {
+        struct Payload: Decodable { let code: String }
+        guard let body, let payload = try? JSONDecoder().decode(Payload.self, from: body) else {
+            return nil
+        }
+        return payload.code
+    }
+
+    private func registerNew(remoteAddr: String, body: Data?) async -> HTTPResponseLite {
+        let peer: PeerIdentity
+        let currentConfig = config()
+        var grantedScope: DeviceScope = .read
+        var skipPairingCode = false
+        if allowLocalhost, Self.isLoopback(remoteAddr),
+           let login = currentConfig.allowLogin.first {
+            skipPairingCode = true
+            // Dev bypass — see `defaultAllowLocalhost()`. The peer identity
+            // is fabricated from the first allow_login so the simulator can
+            // pair without traversing tailscaled. nodeKey is a stable
+            // synthetic value so re-registering yields the same deviceId.
+            peer = PeerIdentity(
+                loginName: login,
+                hostname: "localhost-dev",
+                os: "ios-simulator",
+                nodeKey: BearerSourceAuthorizer.devLocalhostNodeKey(login: login)
+            )
+        } else {
+            switch await registrationPeerResolver.resolve(remoteAddress: remoteAddr) {
+            case .peer(let resolved):
+                peer = resolved
+            case .peerNotFound:
+                logger.warning("registration denied: Tailscale peer not found")
+                return .init(.forbidden)
+            case .unavailable:
+                logger.warning("registration deferred: Tailscale peer lookup unavailable")
+                return Self.identityUnavailableResponse()
+            }
+
+            switch await registrationAuthorizer.decision(for: peer.loginName) {
+            case .allowed:
+                break
+            case .denied:
+                logger.warning("registration denied: Tailscale login is outside policy")
+                return .init(.forbidden)
+            case .identityUnavailable:
+                logger.warning("registration deferred: Mac Tailscale identity unavailable")
+                return Self.identityUnavailableResponse()
+            }
+        }
+
+        if let pairing, !skipPairingCode {
+            switch pairing.codes.consume(Self.presentedCode(from: body) ?? "") {
+            case .accepted(let scope):
+                grantedScope = scope
+            case .rejected(let reason):
+                logger.warning("registration denied: pairing code rejected (\(reason.rawValue))")
+                return .init(.forbidden)
+            }
+        }
+
+        let deviceId = BearerSourceAuthorizer.deviceID(for: peer.nodeKey)
+        // Register atomically replaces the same node's bearer. A separate
+        // revoke write would create an outage window if the replacement write
+        // failed after the old credential had already been removed.
+        do {
+            let token = try deviceStore.register(deviceId: deviceId,
+                                                 loginName: peer.loginName,
+                                                 hostname: peer.hostname,
+                                                 apnsToken: nil,
+                                                 stableId: peer.stableID,
+                                                 scope: grantedScope)
+            struct R: Encodable {
+                let device_id: String
+                let token: String
+            }
+            let body = try JSONEncoder().encode(R(device_id: deviceId, token: token))
+            return .init(.ok, body: body)
+        } catch {
+            logger.error("device registration failed: registry persistence error")
+            return .init(.internalServerError)
+        }
+    }
+}
+
+extension Routes {
+    static func identityUnavailableResponse() -> HTTPResponseLite {
+        .init(
+            .serviceUnavailable,
+            body: Data(#"{"error":"tailscale_identity_unavailable","retry_after_seconds":5}"#.utf8),
+            headers: [
+                ("Content-Type", "application/json"),
+                ("Retry-After", "5"),
+            ]
+        )
+    }
+
+    static func isLoopback(_ addr: String) -> Bool {
+        addr == "127.0.0.1" || addr == "::1" || addr == "0:0:0:0:0:0:0:1"
+    }
+}

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.brb.relay</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__BIN__</string>
+    <string>serve</string>
+    <string>--config</string>
+    <string>__CONFIG__</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CMUX_SOCKET_PATH</key>
+    <string>__SOCKET__</string>
+    <key>CMUX_NO_SELF_LOGIN</key>
+    <string>__NO_SELF_LOGIN__</string>
+    <key>BRB_HOME</key>
+    <string>__DEST__</string>
+    <key>PATH</key>
+    <string>__RELAY_PATH__</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__LOGDIR__/stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOGDIR__/stderr.log</string>
+</dict>
+</plist>

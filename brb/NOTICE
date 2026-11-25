@@ -1,0 +1,10 @@
+BRB
+Copyright (c) 2026 the BRB authors.
+
+BRB lives in the brb/ folder of a fork of manaflow-ai/cmux and is distributed
+under GPL-3.0-or-later, the same license as cmux (see the repository LICENSE).
+
+brb/relay/ is derived from cmux-remote by NewTurn2017
+(https://github.com/NewTurn2017/cmux-remote), which is MIT licensed.
+Its license text is kept in brb/relay/LICENSE-MIT. Changes by BRB are listed
+in brb/docs/r1-notes.md.
